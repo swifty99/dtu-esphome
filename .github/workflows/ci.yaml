@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: pytest tests/unit
+
+  compile:
+    runs-on: ubuntu-latest
+    container:
+      # yamllint disable-line rule:line-length
+      image: ghcr.io/esphome/esphome:2026.5.0-dev20260503@sha256:fae8aa9f1aa8c1dc54774c17e28487055ac2cbe14d13dd38e6a1f480e9b98411
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - test.esp32-arduino.yaml
+          - test.esp32-idf.yaml
+          - test.esp32s3-arduino.yaml
+          - test.esp32s3-idf.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - run: esphome compile tests/components/hoymiles_dtu/${{ matrix.target }}

@@ -1,0 +1,12 @@
+ESPHome Hoymiles DTU
+Copyright (C) 2026
+
+This project is intended to include protocol and radio work derived from:
+
+- OpenDTU: https://github.com/tbnobody/OpenDTU
+- AhoyDTU: https://github.com/lumapu/ahoy
+
+No OpenDTU or AhoyDTU source files are vendored in Phase 0. Future vendored
+files must preserve their original license notices and must be recorded in
+components/hoymiles_dtu/vendor/VENDOR_NOTES.md with upstream paths and commit
+hashes.

@@ -1,0 +1,22 @@
+substitutions:
+  board: esp32dev
+  framework: arduino
+
+esphome:
+  name: hoymiles-dtu-minimal
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu

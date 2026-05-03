@@ -1,0 +1,15 @@
+.esphome/
+.pioenvs/
+.piolibdeps/
+tests/components/hoymiles_dtu/.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.DS_Store

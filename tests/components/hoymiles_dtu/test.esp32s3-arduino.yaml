@@ -1,0 +1,6 @@
+substitutions:
+  board: esp32-s3-devkitc-1
+  framework: arduino
+
+packages:
+  minimal: !include test.minimal.yaml

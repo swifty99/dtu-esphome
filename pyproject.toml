@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["components", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]

@@ -1,0 +1,6 @@
+substitutions:
+  board: esp32dev
+  framework: esp-idf
+
+packages:
+  minimal: !include test.minimal.yaml
