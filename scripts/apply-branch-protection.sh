@@ -7,9 +7,6 @@ branch="${2:-main}"
 gh api \
   --method PUT \
   "repos/${repo}/branches/${branch}/protection" \
-  --field required_linear_history=true \
-  --field allow_force_pushes=false \
-  --field allow_deletions=false \
   --input - <<'JSON'
 {
   "required_status_checks": {
@@ -22,6 +19,9 @@ gh api \
   },
   "enforce_admins": true,
   "required_pull_request_reviews": null,
-  "restrictions": null
+  "restrictions": null,
+  "required_linear_history": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false
 }
 JSON
