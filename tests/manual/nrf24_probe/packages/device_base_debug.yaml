@@ -1,0 +1,29 @@
+# ESPHome Zoo-style WiFi/API/OTA base for manual nRF24 debug firmware.
+#
+# Expects these substitutions in the including YAML:
+# - plug_name
+# - device_name
+
+preferences:
+  flash_write_interval: 10min
+
+wifi:
+  networks:
+    - ssid: "Bit4Thing_wz"
+      password: !secret wifi_pw_home
+    - ssid: "Bit_Pumpe"
+      password: !secret wifi_pw_home
+    - ssid: "Bit4Thing"
+      password: !secret wifi_pw_4thing
+
+  ap:
+    ssid: "${device_name}.a"
+    password: !secret web_server_password
+
+api:
+  reboot_timeout: 4h
+
+ota:
+  - platform: esphome
+
+captive_portal:

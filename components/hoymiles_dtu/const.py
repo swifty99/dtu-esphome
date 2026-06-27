@@ -1,0 +1,27 @@
+CONF_CE_PIN = "ce_pin"
+CONF_INVERTER_ID = "inverter_id"
+CONF_INVERTERS = "inverters"
+CONF_IRQ_PIN = "irq_pin"
+CONF_MODEL = "model"
+CONF_PA_LEVEL = "pa_level"
+CONF_POLL_INTERVAL = "poll_interval"
+CONF_SERIAL = "serial"
+
+CONF_AC_CURRENT = "ac_current"
+CONF_AC_FREQUENCY = "ac_frequency"
+CONF_AC_POWER = "ac_power"
+CONF_AC_VOLTAGE = "ac_voltage"
+CONF_CHANNELS = "channels"
+CONF_DC_CURRENT = "dc_current"
+CONF_DC_POWER = "dc_power"
+CONF_DC_VOLTAGE = "dc_voltage"
+CONF_LAST_SEEN = "last_seen"
+CONF_STATUS = "status"
+CONF_TEMPERATURE = "temperature"
+CONF_YIELD_TODAY = "yield_today"
+CONF_YIELD_TOTAL = "yield_total"
+
+HM_4CH_MODELS = {
+    "hm_1200": 1200,
+    "hm_1500": 1500,
+}

@@ -1,0 +1,34 @@
+# ESPHome Zoo-style default diagnostics for manual nRF24 debug firmware.
+
+sensor:
+  - platform: uptime
+    name: "${plug_name}_Uptime"
+    update_interval: 300s
+    entity_category: diagnostic
+
+  - platform: wifi_signal
+    name: "${plug_name}_WiFi_Signal"
+    update_interval: 60s
+    entity_category: diagnostic
+    filters:
+      - sliding_window_moving_average:
+          window_size: 15
+          send_every: 2
+      - or:
+          - delta: 2
+          - throttle: 10min
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address ${plug_name}"
+    ssid:
+      name: "${plug_name} Connected SSID"
+    bssid:
+      name: "${plug_name} Connected BSSID"
+    mac_address:
+      name: "${plug_name} Mac Wifi Address"
+
+button:
+  - platform: restart
+    name: "${plug_name} Restart"

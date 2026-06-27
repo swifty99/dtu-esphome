@@ -1,0 +1,103 @@
+substitutions:
+  board: esp32-s2-saola-1
+  framework: arduino
+
+esphome:
+  name: hoymiles-dtu-hm4-readonly
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_CDC
+
+spi:
+  id: dtu_spi
+  clk_pin: GPIO5
+  mosi_pin: GPIO11
+  miso_pin: GPIO16
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: GPIO9
+  ce_pin: GPIO12
+  irq_pin: GPIO7
+  poll_interval: 15s
+  pa_level: low
+  inverters:
+    - id: hm4
+      serial: "114180000000"
+      model: hm_1500
+
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power:
+      name: "HM4 AC Power"
+    ac_voltage:
+      name: "HM4 AC Voltage"
+    ac_current:
+      name: "HM4 AC Current"
+    ac_frequency:
+      name: "HM4 AC Frequency"
+    temperature:
+      name: "HM4 Temperature"
+    yield_today:
+      name: "HM4 Yield Today"
+    yield_total:
+      name: "HM4 Yield Total"
+    channels:
+      - number: 1
+        dc_voltage:
+          name: "HM4 CH1 DC Voltage"
+        dc_current:
+          name: "HM4 CH1 DC Current"
+        dc_power:
+          name: "HM4 CH1 DC Power"
+        yield_today:
+          name: "HM4 CH1 Yield Today"
+      - number: 2
+        dc_voltage:
+          name: "HM4 CH2 DC Voltage"
+        dc_current:
+          name: "HM4 CH2 DC Current"
+        dc_power:
+          name: "HM4 CH2 DC Power"
+        yield_today:
+          name: "HM4 CH2 Yield Today"
+      - number: 3
+        dc_voltage:
+          name: "HM4 CH3 DC Voltage"
+        dc_current:
+          name: "HM4 CH3 DC Current"
+        dc_power:
+          name: "HM4 CH3 DC Power"
+        yield_today:
+          name: "HM4 CH3 Yield Today"
+      - number: 4
+        dc_voltage:
+          name: "HM4 CH4 DC Voltage"
+        dc_current:
+          name: "HM4 CH4 DC Current"
+        dc_power:
+          name: "HM4 CH4 DC Power"
+        yield_today:
+          name: "HM4 CH4 Yield Today"
+
+text_sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    status:
+      name: "HM4 Status"
+    last_seen:
+      name: "HM4 Last Seen"

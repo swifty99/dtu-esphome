@@ -1,0 +1,6 @@
+substitutions:
+  board: esp32-s2-saola-1
+  framework: esp-idf
+
+packages:
+  hm4: !include test.hm4-readonly.yaml

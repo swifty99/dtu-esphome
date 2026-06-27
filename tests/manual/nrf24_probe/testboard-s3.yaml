@@ -1,0 +1,27 @@
+esphome:
+  name: nrf24-probe-s3
+  friendly_name: nRF24 Probe S3
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_CDC
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [nrf24_probe]
+
+nrf24_probe:
+  id: probe
+  ce_pin: 12
+  cs_pin: 9
+  sck_pin: 5
+  mosi_pin: 11
+  miso_pin: 16
+  irq_pin: 7
