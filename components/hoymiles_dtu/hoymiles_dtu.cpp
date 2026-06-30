@@ -130,6 +130,12 @@ void HoymilesDtuInverter::publish_telemetry(const HmTelemetry &telemetry, uint32
   if (ac_frequency_sensor_ != nullptr) {
     ac_frequency_sensor_->publish_state(telemetry.ac_frequency);
   }
+  if (reactive_power_sensor_ != nullptr) {
+    reactive_power_sensor_->publish_state(telemetry.reactive_power);
+  }
+  if (power_factor_sensor_ != nullptr) {
+    power_factor_sensor_->publish_state(telemetry.power_factor);
+  }
   if (temperature_sensor_ != nullptr) {
     temperature_sensor_->publish_state(telemetry.temperature);
   }
@@ -348,6 +354,87 @@ void HoymilesDtuComponent::radio_listen(uint8_t channel, uint16_t window_ms, uin
   debug_prepare_();
   debug_listen_window_(channel, 0, window_ms, dwell_ms);
   debug_restore_(restore_pa_level);
+}
+
+void HoymilesDtuComponent::radio_set_power_limit(uint16_t percent, bool persistent) {
+  if (!radio_ok_) {
+    debug_publish_error_("radio not ready");
+    return;
+  }
+  if (!debug_can_run_()) {
+    return;
+  }
+  if (inverters_.empty()) {
+    debug_publish_error_("no inverter configured");
+    return;
+  }
+  HoymilesDtuInverter *inverter = inverters_.front();
+  uint8_t packet[32];
+  const uint8_t len =
+      hm_build_power_limit_request(inverter->get_radio_id(), dtu_serial_, percent, persistent, packet, sizeof(packet));
+  if (len == 0) {
+    debug_publish_error_("power-limit build failed");
+    return;
+  }
+
+  const HmPaLevel restore_pa_level = pa_level_;
+  debug_prepare_();
+
+  uint8_t address[5];
+  hm_radio_id_to_address(inverter->get_radio_id(), address);
+
+  // Burst-acquire: send the control packet on rotating channels until the inverter ACKs.
+  bool acked = false;
+  uint8_t tx_channel = HM_RF_CHANNELS[0];
+  for (uint8_t attempt = 0; attempt < MAX_TX_ATTEMPTS && !acked; attempt++) {
+    tx_channel = HM_RF_CHANNELS[attempt % 5];
+    uint8_t status = 0;
+    debug_send_payload_(packet, len, address, tx_channel, pa_level_, &status);
+    acked = (status & NRF_STATUS_TX_DS) != 0;
+  }
+  if (!acked) {
+    ESP_LOGW(TAG, "Power limit %u%%: no ACK after %u attempts", percent, MAX_TX_ATTEMPTS);
+    debug_publish_error_("power-limit no ack");
+    debug_restore_(restore_pa_level);
+    return;
+  }
+
+  // The single dev-control confirmation frame (0xD1) lands on (txCh+3) like the realtime reply, so
+  // park there (don't hop) — one frame gives only one chance to be on the right channel.
+  uint8_t rx_index = 0;
+  for (uint8_t i = 0; i < 5; i++) {
+    if (HM_RF_CHANNELS[i] == tx_channel) {
+      rx_index = (i + 3) % 5;
+      break;
+    }
+  }
+  start_listening_(HM_RF_CHANNELS[rx_index]);
+  const uint32_t started = millis();
+  bool confirmed = false;
+  bool got_response = false;
+  while (millis() - started < 500 && !confirmed) {
+    while ((read_register_(NRF_REG_FIFO_STATUS) & NRF_FIFO_RX_EMPTY) == 0) {
+      uint8_t pkt[32];
+      uint8_t pkt_len = 0;
+      if (!rx_payload_(pkt, &pkt_len)) {
+        break;
+      }
+      char hex[96];
+      format_hex_(pkt, pkt_len, hex, sizeof(hex));
+      ESP_LOGD(TAG, "Power-limit RX ch=%u len=%u data=%s", read_register_(NRF_REG_RF_CH), pkt_len, hex);
+      // DevControl response: cmd byte at [10/11] both 0 = accepted (Ahoy parseDevCtrl).
+      if (pkt_len >= 14 && pkt[0] == (HM_TX_REQ_DEVCONTROL | HM_ALL_FRAMES) && pkt[12] == HM_DEV_CTRL_ACTIVE_POWER) {
+        got_response = true;
+        confirmed = (pkt[10] == 0x00 && pkt[11] == 0x00 && pkt[13] == 0x00);
+      }
+    }
+    delay(1);
+  }
+  stop_listening_();
+  debug_restore_(restore_pa_level);
+
+  ESP_LOGI(TAG, "Power limit %u%% (%s): TX_DS on ch=%u -> %s", percent, persistent ? "persistent" : "non-persistent",
+           tx_channel, confirmed ? "ACCEPTED by inverter" : (got_response ? "REJECTED" : "no confirmation frame"));
 }
 
 bool HoymilesDtuComponent::setup_radio_() {
@@ -815,10 +902,10 @@ bool HoymilesDtuComponent::process_response_(uint32_t now) {
     return false;
   }
   ESP_LOGI(TAG,
-           "Telemetry %012llX: AC %.1fV %.2fHz %.1fW %.2fA | DC %.1fW (ch %.1f/%.1f/%.1f/%.1f) | "
+           "Telemetry %012llX: AC %.1fV %.2fHz %.1fW %.2fA %.1fvar pf=%.2f | DC %.1fW (ch %.1f/%.1f/%.1f/%.1f) | "
            "%.1f°C | YieldToday %.0fWh YieldTotal %.3fkWh | evt=%u",
            active_inverter_->get_serial(), telemetry.ac_voltage, telemetry.ac_frequency, telemetry.ac_power,
-           telemetry.ac_current,
+           telemetry.ac_current, telemetry.reactive_power, telemetry.power_factor,
            telemetry.channels[0].dc_power + telemetry.channels[1].dc_power + telemetry.channels[2].dc_power +
                telemetry.channels[3].dc_power,
            telemetry.channels[0].dc_power, telemetry.channels[1].dc_power, telemetry.channels[2].dc_power,
