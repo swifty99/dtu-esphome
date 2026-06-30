@@ -144,7 +144,7 @@ Acceptance:
   be proven by compile tests.
 
 ## Reference Policy
-
+t
 - Ahoy is the communication reference for HM/nRF24 behavior.
 - Store findings in `components/hoymiles_dtu/REFERENCE_NOTES.md`.
 - Do not copy Ahoy source into this repo unless licensing is revisited.
