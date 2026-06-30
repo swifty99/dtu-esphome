@@ -57,6 +57,9 @@ static constexpr uint16_t DEBUG_MAX_WINDOW_MS = 5000;
 // attempt per loop iteration) up to this many times before giving up for this poll. ~MAX/5 full
 // channel sweeps; with a tight poll_interval this approximates Ahoy's steady retransmit cadence.
 static constexpr uint8_t MAX_TX_ATTEMPTS = 30;
+// On a partial record (link is up, some fragments missing), re-request the whole record this many
+// times before failing the exchange. Each re-request keeps already-received fragments.
+static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
 
 static void format_hex_(const uint8_t *data, uint8_t len, char *buffer, size_t buffer_len) {
   if (buffer_len == 0) {
@@ -412,6 +415,7 @@ void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_
   // Unknown until the inverter sends the fragment with the 0x80 "last" bit; until then never treat
   // the record as complete. (read_available_packets_ lowers this to the real count.)
   expected_frames_ = HM_MAX_FRAME_COUNT;
+  record_attempt_ = 0;
   rx_packet_count_ = 0;
   invalid_frame_count_ = 0;
   duplicate_frame_count_ = 0;
@@ -530,6 +534,16 @@ void HoymilesDtuComponent::poll_rx_(uint32_t now) {
     return;
   }
   if (now - rx_started_ms_ >= RX_TIMEOUT_MS) {
+    // Partial record: the inverter is answering but we missed fragment(s). Re-request the whole
+    // record (keeping fragments we already have — read_available_packets_ dedups by id) up to a
+    // small budget, instead of giving up. Mirrors Ahoy's missing-fragment retransmit.
+    if (frame_count_ > 0 && frame_count_ < expected_frames_ && ++record_attempt_ <= MAX_RECORD_ATTEMPTS) {
+      ESP_LOGD(TAG, "Incomplete record %u/%u - re-requesting (attempt %u)", frame_count_, expected_frames_,
+               record_attempt_);
+      tx_attempt_ = 0;  // give the re-request a fresh acquisition burst
+      transmit_request_(now);
+      return;
+    }
     finish_request_(false, frame_count_ == 0 ? "no response" : "incomplete response", now);
     return;
   }
