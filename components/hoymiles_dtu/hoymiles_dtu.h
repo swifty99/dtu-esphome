@@ -196,6 +196,7 @@ class HoymilesDtuComponent : public Component,
   uint32_t last_channel_switch_ms_{0};
   uint8_t tx_channel_index_{0};
   uint8_t tx_attempt_{0};  // acquisition burst attempt counter (0-based) within one poll
+  uint8_t record_attempt_{0};  // whole-record re-request counter when fragments are missing
   uint8_t rx_channel_index_{0};
   uint8_t current_rx_channel_index_{0};
   bool rx_loop_channels_{false};
