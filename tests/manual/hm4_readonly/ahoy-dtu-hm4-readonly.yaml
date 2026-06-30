@@ -19,6 +19,11 @@ logger:
   level: DEBUG
   hardware_uart: USB_CDC
 
+# Real time so realtime requests (0x0B) carry a valid epoch instead of a millis stub.
+time:
+  - platform: sntp
+    id: dtu_time
+
 spi:
   id: dtu_spi
   clk_pin: GPIO5
@@ -42,7 +47,7 @@ hoymiles_dtu:
   inverters:
     - id: hm4
       serial: !secret hoymiles_hm4_serial
-      model: hm_1500
+      model: hm_1200
 
 sensor:
   - platform: hoymiles_dtu
@@ -81,3 +86,67 @@ text_sensor:
     inverter_id: hm4
     status: { name: "HM4 Status" }
     last_seen: { name: "HM4 Last Seen" }
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    last_tx: { name: "DTU Last TX" }
+    last_rx_payload: { name: "DTU Last RX Payload" }
+    last_register_dump: { name: "DTU Last Register Dump" }
+    last_radio_error: { name: "DTU Last Radio Error" }
+
+script:
+  - id: hm_radio_dump
+    mode: single
+    then:
+      - hoymiles_dtu.radio_dump: dtu
+
+  - id: hm_radio_send_request_bcd
+    mode: single
+    parameters:
+      serial: string
+      tx_channel: int
+      rx_offset: int
+      rx_window_ms: int
+      rx_dwell_ms: int
+    then:
+      - hoymiles_dtu.radio_send_request:
+          id: dtu
+          serial: !lambda return serial;
+          serial_format: bcd
+          tx_channel: !lambda return tx_channel;
+          rx_offset: !lambda return rx_offset;
+          rx_window_ms: !lambda return rx_window_ms;
+          rx_dwell_ms: !lambda return rx_dwell_ms;
+          pa_level: low
+
+  - id: hm_radio_send_raw
+    mode: single
+    parameters:
+      address: string
+      tx_channel: int
+      payload: string
+      rx_offset: int
+      rx_window_ms: int
+      rx_dwell_ms: int
+    then:
+      - hoymiles_dtu.radio_send_raw:
+          id: dtu
+          address: !lambda return address;
+          tx_channel: !lambda return tx_channel;
+          payload: !lambda return payload;
+          rx_offset: !lambda return rx_offset;
+          rx_window_ms: !lambda return rx_window_ms;
+          rx_dwell_ms: !lambda return rx_dwell_ms;
+          pa_level: low
+
+  - id: hm_radio_listen
+    mode: single
+    parameters:
+      channel: int
+      window_ms: int
+      dwell_ms: int
+    then:
+      - hoymiles_dtu.radio_listen:
+          id: dtu
+          channel: !lambda return channel;
+          window_ms: !lambda return window_ms;
+          dwell_ms: !lambda return dwell_ms;

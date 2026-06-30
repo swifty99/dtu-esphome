@@ -1,11 +1,27 @@
 CONF_CE_PIN = "ce_pin"
+CONF_ADDRESS = "address"
+CONF_CHANNEL = "channel"
+CONF_DTU_ID = "dtu_id"
+CONF_DWELL_MS = "dwell_ms"
 CONF_INVERTER_ID = "inverter_id"
 CONF_INVERTERS = "inverters"
 CONF_IRQ_PIN = "irq_pin"
+CONF_LAST_RADIO_ERROR = "last_radio_error"
+CONF_LAST_REGISTER_DUMP = "last_register_dump"
+CONF_LAST_RX_PAYLOAD = "last_rx_payload"
+CONF_LAST_TX = "last_tx"
 CONF_MODEL = "model"
 CONF_PA_LEVEL = "pa_level"
+CONF_PAYLOAD = "payload"
 CONF_POLL_INTERVAL = "poll_interval"
+CONF_RX_DWELL_MS = "rx_dwell_ms"
+CONF_RX_OFFSET = "rx_offset"
+CONF_RX_WINDOW_MS = "rx_window_ms"
 CONF_SERIAL = "serial"
+CONF_SERIAL_FORMAT = "serial_format"
+CONF_TIMESTAMP = "timestamp"
+CONF_TX_CHANNEL = "tx_channel"
+CONF_WINDOW_MS = "window_ms"
 
 CONF_AC_CURRENT = "ac_current"
 CONF_AC_FREQUENCY = "ac_frequency"
@@ -25,3 +41,7 @@ HM_4CH_MODELS = {
     "hm_1200": 1200,
     "hm_1500": 1500,
 }
+
+SERIAL_FORMAT_DECIMAL = "decimal"
+SERIAL_FORMAT_BCD = "bcd"
+SERIAL_FORMAT_RAW = "raw"

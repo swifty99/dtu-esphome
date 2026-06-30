@@ -95,10 +95,19 @@ uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_seria
   }
   memset(buffer, 0, 27);
   buffer[0] = HM_TX_REQ_INFO;
+  // On-air byte order must match Ahoy exactly, or the inverter ACKs at the radio layer but rejects
+  // the request at the app layer (it checks [1..4] against its own id) and routes its reply (to the
+  // address derived from [5..8]) to somewhere we are not listening. The address bytes are
+  // `0x01 + idbytes`, so [1..4] = inverter_address[1..4] = LSB-first of (radio_id>>8), and
+  // [5..8] = dtu_address[1..4] = big-endian dtu_serial. (Ahoy's CP_U32_* macros are misnamed; this
+  // reproduces their actual output, verified against a live capture: inverter id `82 80 69 89`.)
   write_hm_u32_le(&buffer[1], static_cast<uint32_t>(inverter_radio_id >> 8));
   write_hm_u32_be(&buffer[5], dtu_serial);
   buffer[9] = HM_ALL_FRAMES;
   buffer[10] = HM_REAL_TIME_RUN_DATA_DEBUG;
+  // Timestamp is transmitted big-endian (MSB first). Confirmed two ways: a live on-air
+  // capture of Ahoy (`6A 43 90 09` = a valid epoch) and Ahoy's source, where the
+  // misleadingly-named CP_U32_LittleEndian macro actually writes MSB-first (helper.h).
   write_hm_u32_be(&buffer[12], timestamp);
   uint8_t len = 24;
   const uint16_t crc16 = hm_crc16(&buffer[10], len - 10);
@@ -163,7 +172,10 @@ bool hm_assemble_payload(const HmFrame *frames, uint8_t frame_count, uint8_t *pa
 }
 
 bool hm_parse_4ch_payload(const uint8_t *payload, uint8_t len, HmTelemetry *telemetry) {
-  if (payload == nullptr || telemetry == nullptr || len < 62 || payload[0] != HM_REAL_TIME_RUN_DATA_DEBUG) {
+  // The assembled record is field data starting at byte 0 (offsets below match Ahoy's
+  // hm4chAssignment); it does NOT begin with the 0x0B command byte (that is only in the request).
+  // HM4CH record is 62 field bytes + a trailing CRC16, so 62 is the minimum length.
+  if (payload == nullptr || telemetry == nullptr || len < 62) {
     return false;
   }
   HmTelemetry out;
