@@ -13,8 +13,11 @@ static constexpr uint8_t HM_MAX_PAYLOAD_SIZE = 96;
 static constexpr uint8_t HM_RF_CHANNELS[5] = {3, 23, 40, 61, 75};
 
 static constexpr uint8_t HM_TX_REQ_INFO = 0x15;
+static constexpr uint8_t HM_TX_REQ_DEVCONTROL = 0x51;
 static constexpr uint8_t HM_ALL_FRAMES = 0x80;
+static constexpr uint8_t HM_SINGLE_FRAME = 0x81;
 static constexpr uint8_t HM_REAL_TIME_RUN_DATA_DEBUG = 0x0B;
+static constexpr uint8_t HM_DEV_CTRL_ACTIVE_POWER = 0x0B;  // ActivePowerContr (=11)
 
 enum HmModel : uint8_t {
   HM_1200,
@@ -41,6 +44,8 @@ struct HmTelemetry {
   float ac_current{0.0f};
   float ac_power{0.0f};
   float ac_frequency{0.0f};
+  float reactive_power{0.0f};
+  float power_factor{0.0f};
   float temperature{0.0f};
   float yield_today{0.0f};
   float yield_total{0.0f};
@@ -61,6 +66,10 @@ void hm_radio_id_to_address(uint64_t radio_id, uint8_t *address);
 uint32_t hm_generate_dtu_serial();
 uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint32_t timestamp,
                                   uint8_t *buffer, size_t buffer_len);
+// Active-power-limit DevControl request. percent is 0..100; persistent=true survives an inverter
+// restart (RelativPersistent), false is RelativNonPersistent. Returns packet length or 0 on error.
+uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent,
+                                     bool persistent, uint8_t *buffer, size_t buffer_len);
 bool hm_parse_frame(const uint8_t *packet, uint8_t len, uint64_t inverter_radio_id, HmFrame *frame);
 bool hm_assemble_payload(const HmFrame *frames, uint8_t frame_count, uint8_t *payload, size_t payload_len,
                          uint8_t *assembled_len);

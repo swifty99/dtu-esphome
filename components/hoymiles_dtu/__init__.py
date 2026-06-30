@@ -14,6 +14,8 @@ from .const import (
     CONF_MODEL,
     CONF_PA_LEVEL,
     CONF_PAYLOAD,
+    CONF_PERCENT,
+    CONF_PERSISTENT,
     CONF_POLL_INTERVAL,
     CONF_RX_DWELL_MS,
     CONF_RX_OFFSET,
@@ -46,6 +48,9 @@ RadioSendRequestAction = hoymiles_dtu_ns.class_(
 )
 RadioSendRawAction = hoymiles_dtu_ns.class_("RadioSendRawAction", automation.Action)
 RadioListenAction = hoymiles_dtu_ns.class_("RadioListenAction", automation.Action)
+RadioSetPowerLimitAction = hoymiles_dtu_ns.class_(
+    "RadioSetPowerLimitAction", automation.Action
+)
 
 MODEL_OPTIONS = {
     "hm_1200": HmModel.HM_1200,
@@ -292,4 +297,31 @@ async def radio_listen_to_code(config, action_id, template_arg, args):
     cg.add(var.set_channel(channel))
     cg.add(var.set_window_ms(window_ms))
     cg.add(var.set_dwell_ms(dwell_ms))
+    return var
+
+
+RADIO_SET_POWER_LIMIT_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HoymilesDtuComponent),
+        cv.Optional(CONF_PERCENT, default=100): cv.templatable(
+            cv.int_range(min=0, max=100)
+        ),
+        cv.Optional(CONF_PERSISTENT, default=True): cv.templatable(cv.boolean),
+    }
+)
+
+
+@automation.register_action(
+    "hoymiles_dtu.radio_set_power_limit",
+    RadioSetPowerLimitAction,
+    RADIO_SET_POWER_LIMIT_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def radio_set_power_limit_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    percent = await cg.templatable(config[CONF_PERCENT], args, cg.uint16)
+    persistent = await cg.templatable(config[CONF_PERSISTENT], args, cg.bool_)
+    cg.add(var.set_percent(percent))
+    cg.add(var.set_persistent(persistent))
     return var

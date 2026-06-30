@@ -118,6 +118,34 @@ uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_seria
   return len;
 }
 
+uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent,
+                                     bool persistent, uint8_t *buffer, size_t buffer_len) {
+  if (buffer_len < 19 || percent > 100) {
+    return 0;
+  }
+  memset(buffer, 0, 19);
+  buffer[0] = HM_TX_REQ_DEVCONTROL;
+  // Same id byte order as the realtime request (see hm_build_realtime_request).
+  write_hm_u32_le(&buffer[1], static_cast<uint32_t>(inverter_radio_id >> 8));
+  write_hm_u32_be(&buffer[5], dtu_serial);
+  buffer[9] = HM_SINGLE_FRAME;
+  buffer[10] = HM_DEV_CTRL_ACTIVE_POWER;
+  buffer[11] = 0x00;
+  const uint16_t limit = static_cast<uint16_t>(percent * 10);  // relative %, transmitted ×10
+  buffer[12] = (limit >> 8) & 0xFF;
+  buffer[13] = limit & 0xFF;
+  const uint16_t control = persistent ? 0x0101 : 0x0001;  // RelativPersistent / RelativNonPersistent
+  buffer[14] = (control >> 8) & 0xFF;
+  buffer[15] = control & 0xFF;
+  uint8_t len = 16;
+  const uint16_t crc16 = hm_crc16(&buffer[10], len - 10);
+  buffer[len++] = (crc16 >> 8) & 0xFF;
+  buffer[len++] = crc16 & 0xFF;
+  buffer[len] = hm_crc8(buffer, len);
+  len++;
+  return len;
+}
+
 bool hm_parse_frame(const uint8_t *packet, uint8_t len, uint64_t inverter_radio_id, HmFrame *frame) {
   if (packet == nullptr || frame == nullptr || len < 12) {
     return false;
@@ -206,7 +234,9 @@ bool hm_parse_4ch_payload(const uint8_t *payload, uint8_t len, HmTelemetry *tele
   out.ac_voltage = read_u16_be(payload, 46) / 10.0f;
   out.ac_frequency = read_u16_be(payload, 48) / 100.0f;
   out.ac_power = read_u16_be(payload, 50) / 10.0f;
+  out.reactive_power = read_u16_be(payload, 52) / 10.0f;
   out.ac_current = read_u16_be(payload, 54) / 100.0f;
+  out.power_factor = read_u16_be(payload, 56) / 1000.0f;
   out.temperature = static_cast<int16_t>(read_u16_be(payload, 58)) / 10.0f;
   out.event_code = read_u16_be(payload, 60);
   for (const auto &channel : out.channels) {

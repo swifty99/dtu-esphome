@@ -23,6 +23,20 @@ packages:
 esphome:
   name: ${device_name}
   friendly_name: HM Link Probe
+  # One-shot: clear the inverter's active-power limit to 100% (it was throttled to 2%). Retries a few
+  # times because the action is skipped if a poll exchange is mid-flight. Remove after confirming.
+  on_boot:
+    priority: -200
+    then:
+      - delay: 25s
+      - repeat:
+          count: 3
+          then:
+            - hoymiles_dtu.radio_set_power_limit:
+                id: dtu
+                percent: 100
+                persistent: true
+            - delay: 5s
 
 esp32:
   board: esp32-s2-saola-1

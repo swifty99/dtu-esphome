@@ -44,6 +44,8 @@ class HoymilesDtuInverter {
   void set_ac_voltage_sensor(sensor::Sensor *sensor) { ac_voltage_sensor_ = sensor; }
   void set_ac_current_sensor(sensor::Sensor *sensor) { ac_current_sensor_ = sensor; }
   void set_ac_frequency_sensor(sensor::Sensor *sensor) { ac_frequency_sensor_ = sensor; }
+  void set_reactive_power_sensor(sensor::Sensor *sensor) { reactive_power_sensor_ = sensor; }
+  void set_power_factor_sensor(sensor::Sensor *sensor) { power_factor_sensor_ = sensor; }
   void set_temperature_sensor(sensor::Sensor *sensor) { temperature_sensor_ = sensor; }
   void set_yield_today_sensor(sensor::Sensor *sensor) { yield_today_sensor_ = sensor; }
   void set_yield_total_sensor(sensor::Sensor *sensor) { yield_total_sensor_ = sensor; }
@@ -82,6 +84,8 @@ class HoymilesDtuInverter {
   sensor::Sensor *ac_voltage_sensor_{nullptr};
   sensor::Sensor *ac_current_sensor_{nullptr};
   sensor::Sensor *ac_frequency_sensor_{nullptr};
+  sensor::Sensor *reactive_power_sensor_{nullptr};
+  sensor::Sensor *power_factor_sensor_{nullptr};
   sensor::Sensor *temperature_sensor_{nullptr};
   sensor::Sensor *yield_today_sensor_{nullptr};
   sensor::Sensor *yield_total_sensor_{nullptr};
@@ -120,6 +124,7 @@ class HoymilesDtuComponent : public Component,
   void radio_send_raw(const std::string &address_hex, uint8_t tx_channel, const std::string &payload_hex,
                       int8_t rx_offset, uint16_t rx_window_ms, uint16_t rx_dwell_ms, HmPaLevel pa_level);
   void radio_listen(uint8_t channel, uint16_t window_ms, uint16_t dwell_ms);
+  void radio_set_power_limit(uint16_t percent, bool persistent);
 
   void setup() override;
   void loop() override;
@@ -273,6 +278,17 @@ template<typename... Ts> class RadioListenAction : public Action<Ts...>, public 
 
   void play(const Ts &...x) override {
     this->parent_->radio_listen(this->channel_.value(x...), this->window_ms_.value(x...), this->dwell_ms_.value(x...));
+  }
+};
+
+template<typename... Ts>
+class RadioSetPowerLimitAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+ public:
+  TEMPLATABLE_VALUE(uint16_t, percent)
+  TEMPLATABLE_VALUE(bool, persistent)
+
+  void play(const Ts &...x) override {
+    this->parent_->radio_set_power_limit(this->percent_.value(x...), this->persistent_.value(x...));
   }
 };
 

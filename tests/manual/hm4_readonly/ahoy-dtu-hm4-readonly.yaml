@@ -62,6 +62,8 @@ sensor:
     ac_voltage: { name: "HM4 AC Voltage" }
     ac_current: { name: "HM4 AC Current" }
     ac_frequency: { name: "HM4 AC Frequency" }
+    reactive_power: { name: "HM4 Reactive Power" }
+    power_factor: { name: "HM4 Power Factor" }
     temperature: { name: "HM4 Temperature" }
     yield_today: { name: "HM4 Yield Today" }
     yield_total: { name: "HM4 Yield Total" }
