@@ -42,11 +42,11 @@ class Nrf24Probe : public Component {
   void run_diagnostics_();
   TransferResult run_bitbang_probe_();
   uint8_t bitbang_transfer_byte_(uint8_t tx);
-  void probe_output_pin_(int pin, int& low_level, int& high_level);
+  void probe_output_pin_(int pin, int &low_level, int &high_level);
   int read_miso_with_pull_(gpio_pull_mode_t pull_mode);
   uint8_t read_register_(uint8_t reg);
   void write_register_(uint8_t reg, uint8_t value);
-  bool transfer_(const uint8_t* tx, uint8_t* rx, size_t len, bool manual_cs = false);
+  bool transfer_(const uint8_t *tx, uint8_t *rx, size_t len, bool manual_cs = false);
 
   int ce_pin_{-1};
   int cs_pin_{-1};

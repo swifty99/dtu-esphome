@@ -82,9 +82,10 @@ def test_realtime_request_uses_ahoy_byte_order():
 
     assert len(request) == 27
     assert request[0] == 0x15
-    # Inverter id [1..4] and DTU id [5..8] are the address bytes (0x01 + idbytes) in wire order:
-    # [1..4] = LSB-first of (radio_id>>8); [5..8] = big-endian dtu_serial. Reversing either makes
-    # the inverter ACK but reject the request (it checks [1..4]) / reply to the wrong address ([5..8]).
+    # Inverter id [1..4] and DTU id [5..8] are the address bytes (0x01 + idbytes)
+    # in wire order: [1..4] = LSB-first of (radio_id>>8); [5..8] = big-endian
+    # dtu_serial. Reversing either makes the inverter ACK but reject the request
+    # (it checks [1..4]) / reply to the wrong address ([5..8]).
     assert request[1:5] == (inverter_radio_id >> 8).to_bytes(4, "little")
     assert request[1:5] == bytes.fromhex("0d08f1cd")
     assert request[5:9] == bytes.fromhex("83915460")

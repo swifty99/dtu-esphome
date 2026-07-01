@@ -41,11 +41,6 @@ CONF_TEMPERATURE = "temperature"
 CONF_YIELD_TODAY = "yield_today"
 CONF_YIELD_TOTAL = "yield_total"
 
-HM_4CH_MODELS = {
-    "hm_1200": 1200,
-    "hm_1500": 1500,
-}
-
 SERIAL_FORMAT_DECIMAL = "decimal"
 SERIAL_FORMAT_BCD = "bcd"
 SERIAL_FORMAT_RAW = "raw"

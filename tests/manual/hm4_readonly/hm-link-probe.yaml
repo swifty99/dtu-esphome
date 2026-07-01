@@ -23,20 +23,6 @@ packages:
 esphome:
   name: ${device_name}
   friendly_name: HM Link Probe
-  # One-shot: clear the inverter's active-power limit to 100% (it was throttled to 2%). Retries a few
-  # times because the action is skipped if a poll exchange is mid-flight. Remove after confirming.
-  on_boot:
-    priority: -200
-    then:
-      - delay: 25s
-      - repeat:
-          count: 3
-          then:
-            - hoymiles_dtu.radio_set_power_limit:
-                id: dtu
-                percent: 100
-                persistent: true
-            - delay: 5s
 
 esp32:
   board: esp32-s2-saola-1
@@ -79,12 +65,25 @@ hoymiles_dtu:
       serial: "116182806989"
       model: hm_1200
 
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power: {name: "HM4 AC Power"}
+    ac_voltage: {name: "HM4 AC Voltage"}
+    ac_frequency: {name: "HM4 AC Frequency"}
+    temperature: {name: "HM4 Temperature"}
+    yield_total: {name: "HM4 Yield Total"}
+
 text_sensor:
   - platform: hoymiles_dtu
+    inverter_id: hm4
+    status: {name: "HM4 Status"}
+    last_seen: {name: "HM4 Last Seen"}
+  - platform: hoymiles_dtu
     dtu_id: dtu
-    last_tx: { name: "DTU Last TX" }
-    last_rx_payload: { name: "DTU Last RX Payload" }
-    last_radio_error: { name: "DTU Last Radio Error" }
+    last_tx: {name: "DTU Last TX"}
+    last_rx_payload: {name: "DTU Last RX Payload"}
+    last_radio_error: {name: "DTU Last Radio Error"}
 
 # Diagnostic radio_dump / radio_send_request intervals removed: the poll loop now drives the real
 # request+burst path continuously, so those would just contend for the (rarely idle) radio.

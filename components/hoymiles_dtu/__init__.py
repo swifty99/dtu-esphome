@@ -52,7 +52,16 @@ RadioSetPowerLimitAction = hoymiles_dtu_ns.class_(
     "RadioSetPowerLimitAction", automation.Action
 )
 
+# Same HM families Ahoy supports over nRF24, keyed by DC-input count:
+# 1-channel HM-300/350/400, 2-channel HM-600/700/800, 4-channel HM-1000/1200/1500.
 MODEL_OPTIONS = {
+    "hm_300": HmModel.HM_300,
+    "hm_350": HmModel.HM_350,
+    "hm_400": HmModel.HM_400,
+    "hm_600": HmModel.HM_600,
+    "hm_700": HmModel.HM_700,
+    "hm_800": HmModel.HM_800,
+    "hm_1000": HmModel.HM_1000,
     "hm_1200": HmModel.HM_1200,
     "hm_1500": HmModel.HM_1500,
 }

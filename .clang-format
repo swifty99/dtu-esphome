@@ -3,10 +3,11 @@ Language: Cpp
 BasedOnStyle: Google
 ColumnLimit: 120
 DerivePointerAlignment: false
-PointerAlignment: Left
+PointerAlignment: Right
 AccessModifierOffset: -1
-AllowShortFunctionsOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: All
 IncludeBlocks: Preserve
+SortIncludes: false
 IndentWidth: 2
 NamespaceIndentation: None
 Standard: c++17

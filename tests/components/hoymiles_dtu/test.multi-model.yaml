@@ -1,0 +1,76 @@
+substitutions:
+  board: esp32dev
+  framework: arduino
+
+esphome:
+  name: hoymiles-dtu-multi-model
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+spi:
+  id: dtu_spi
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+# Exercises all three HM channel families (1ch/2ch/4ch) so the schema and per-model decode paths
+# stay compiled and validated together.
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: GPIO5
+  ce_pin: GPIO4
+  irq_pin: GPIO16
+  poll_interval: 15s
+  inverters:
+    - id: hm1
+      serial: "112100000000"
+      model: hm_400
+    - id: hm2
+      serial: "114100000000"
+      model: hm_800
+    - id: hm4
+      serial: "116100000000"
+      model: hm_1500
+
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm1
+    ac_power: {name: "HM1 AC Power"}
+    yield_total: {name: "HM1 Yield Total"}
+    channels:
+      - number: 1
+        dc_power: {name: "HM1 CH1 DC Power"}
+  - platform: hoymiles_dtu
+    inverter_id: hm2
+    ac_power: {name: "HM2 AC Power"}
+    channels:
+      - number: 1
+        dc_power: {name: "HM2 CH1 DC Power"}
+      - number: 2
+        dc_power: {name: "HM2 CH2 DC Power"}
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power: {name: "HM4 AC Power"}
+    reactive_power: {name: "HM4 Reactive Power"}
+    power_factor: {name: "HM4 Power Factor"}
+    channels:
+      - number: 4
+        dc_power: {name: "HM4 CH4 DC Power"}
+
+text_sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    status: {name: "HM4 Status"}
+    last_seen: {name: "HM4 Last Seen"}

@@ -2,15 +2,27 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 
-def test_hm4_readonly_config_validates():
+REPO = Path(__file__).parents[2]
+CONFIG_DIR = REPO / "tests" / "components" / "hoymiles_dtu"
+
+CONFIGS = [
+    "test.minimal.yaml",
+    "test.hm4-readonly.yaml",
+    "test.multi-model.yaml",
+]
+
+
+@pytest.mark.parametrize("config_name", CONFIGS)
+def test_config_validates(config_name):
     esphome = shutil.which("esphome")
-    assert esphome is not None, "esphome executable not found"
-    repo = Path(__file__).parents[2]
-    config = repo / "tests" / "components" / "hoymiles_dtu" / "test.hm4-readonly.yaml"
+    if esphome is None:
+        pytest.skip("esphome executable not found")
+    config = CONFIG_DIR / config_name
     result = subprocess.run(
         [esphome, "config", str(config)],
-        cwd=repo,
+        cwd=REPO,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

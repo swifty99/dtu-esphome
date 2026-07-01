@@ -5,11 +5,23 @@ nRF24L01+ radio.
 
 ## Status
 
-This project is alpha-stage and HM-only. The current implementation targets
-read-only HM-1200/HM-1500 telemetry over nRF24. Power limit, on/off, restart,
-and robust multi-inverter scheduling are planned later.
+This project is alpha-stage and HM-only. It reads live telemetry over nRF24 and
+supports an active-power-limit command. On/off, restart, and hardened
+multi-inverter scheduling are planned later.
 
-HMS/HMT inverters and CMT2300A radios are out of scope for this repo.
+### Supported models
+
+Same HM microinverter families Ahoy handles over nRF24, grouped by DC-input
+(channel) count:
+
+| Channels | Models (`model:` value) |
+| --- | --- |
+| 1 | HM-300 (`hm_300`), HM-350 (`hm_350`), HM-400 (`hm_400`) |
+| 2 | HM-600 (`hm_600`), HM-700 (`hm_700`), HM-800 (`hm_800`) |
+| 4 | HM-1000 (`hm_1000`), HM-1200 (`hm_1200`), HM-1500 (`hm_1500`) |
+
+Standalone telemetry is verified on hardware against an HM-1200. HMS/HMT
+inverters and CMT2300A radios are out of scope for this repo.
 
 ## Minimal Configuration
 

@@ -19,7 +19,17 @@ static constexpr uint8_t HM_SINGLE_FRAME = 0x81;
 static constexpr uint8_t HM_REAL_TIME_RUN_DATA_DEBUG = 0x0B;
 static constexpr uint8_t HM_DEV_CTRL_ACTIVE_POWER = 0x0B;  // ActivePowerContr (=11)
 
+// Supported HM-series microinverters, grouped by DC-input (channel) count. This mirrors the model
+// families Ahoy handles over nRF24: 1-channel HM-300/350/400, 2-channel HM-600/700/800, and
+// 4-channel HM-1000/1200/1500. The realtime payload layout depends only on the channel count.
 enum HmModel : uint8_t {
+  HM_300,
+  HM_350,
+  HM_400,
+  HM_600,
+  HM_700,
+  HM_800,
+  HM_1000,
   HM_1200,
   HM_1500,
 };
@@ -64,16 +74,20 @@ uint16_t hm_crc16(const uint8_t *data, size_t len);
 uint64_t hm_radio_id_from_serial(uint64_t serial);
 void hm_radio_id_to_address(uint64_t radio_id, uint8_t *address);
 uint32_t hm_generate_dtu_serial();
-uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint32_t timestamp,
-                                  uint8_t *buffer, size_t buffer_len);
+uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint32_t timestamp, uint8_t *buffer,
+                                  size_t buffer_len);
 // Active-power-limit DevControl request. percent is 0..100; persistent=true survives an inverter
 // restart (RelativPersistent), false is RelativNonPersistent. Returns packet length or 0 on error.
-uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent,
-                                     bool persistent, uint8_t *buffer, size_t buffer_len);
+uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent, bool persistent,
+                                     uint8_t *buffer, size_t buffer_len);
 bool hm_parse_frame(const uint8_t *packet, uint8_t len, uint64_t inverter_radio_id, HmFrame *frame);
 bool hm_assemble_payload(const HmFrame *frames, uint8_t frame_count, uint8_t *payload, size_t payload_len,
                          uint8_t *assembled_len);
-bool hm_parse_4ch_payload(const uint8_t *payload, uint8_t len, HmTelemetry *telemetry);
+// Number of DC channels this model reports (1, 2, or 4).
+uint8_t hm_model_channel_count(HmModel model);
+// Decode an assembled realtime record into telemetry. Field byte offsets follow the model's channel
+// count (Ahoy hm{1,2,4}chAssignment). Returns false on a null/too-short payload or unknown model.
+bool hm_parse_realtime_payload(HmModel model, const uint8_t *payload, uint8_t len, HmTelemetry *telemetry);
 const char *hm_model_to_string(HmModel model);
 const char *hm_status_to_string(HmStatus status);
 

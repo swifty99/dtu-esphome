@@ -7,7 +7,7 @@
 namespace esphome {
 namespace nrf24_probe {
 
-static const char* const TAG = "nrf24_probe";
+static const char *const TAG = "nrf24_probe";
 
 static constexpr uint8_t R_REGISTER = 0x00;
 static constexpr uint8_t W_REGISTER = 0x20;
@@ -236,7 +236,7 @@ void Nrf24Probe::run_diagnostics_() {
 
   ESP_LOGI(TAG, "Running SPI diagnostic matrix");
   remove_spi_device_();
-  for (const auto& probe_case : CASES) {
+  for (const auto &probe_case : CASES) {
     gpio_set_level(static_cast<gpio_num_t>(cs_pin_), 1);
     if (!install_spi_device_(probe_case.clock_hz, probe_case.mode, probe_case.hardware_cs)) {
       continue;
@@ -347,7 +347,7 @@ uint8_t Nrf24Probe::bitbang_transfer_byte_(uint8_t tx) {
   return rx;
 }
 
-void Nrf24Probe::probe_output_pin_(int pin, int& low_level, int& high_level) {
+void Nrf24Probe::probe_output_pin_(int pin, int &low_level, int &high_level) {
   gpio_reset_pin(static_cast<gpio_num_t>(pin));
   gpio_set_direction(static_cast<gpio_num_t>(pin), GPIO_MODE_INPUT_OUTPUT);
   gpio_set_level(static_cast<gpio_num_t>(pin), 0);
@@ -379,7 +379,7 @@ void Nrf24Probe::write_register_(uint8_t reg, uint8_t value) {
   transfer_(tx, rx, sizeof(tx));
 }
 
-bool Nrf24Probe::transfer_(const uint8_t* tx, uint8_t* rx, size_t len, bool manual_cs) {
+bool Nrf24Probe::transfer_(const uint8_t *tx, uint8_t *rx, size_t len, bool manual_cs) {
   spi_transaction_t transaction = {};
   transaction.length = len * 8;
   transaction.tx_buffer = tx;
