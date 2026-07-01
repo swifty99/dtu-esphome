@@ -72,3 +72,35 @@ Verified against upstream Ahoy `main`:
   after that it falls back to a reverse sweep through all five channels.
 - Ahoy setup uses 250 kbps RF, CRC16, 5-byte addresses, dynamic payloads, and
   default auto-ack enabled. Retries are `setRetries(3, 15)`.
+
+## HM model families and realtime payload layout, 2026-07-01
+
+Verified against Ahoy `src/hm/hmDefines.h` (`hm1chAssignment`, `hm2chAssignment`,
+`hm4chAssignment`). Ahoy groups HM inverters by DC-input count; the realtime
+record layout depends only on that count, so this component keys the parser on it:
+
+- 1 channel: HM-300 / HM-350 / HM-400 (`HM1CH_PAYLOAD_LEN` 30).
+- 2 channels: HM-600 / HM-700 / HM-800 (`HM2CH_PAYLOAD_LEN` 42).
+- 4 channels: HM-1000 / HM-1200 / HM-1500 (`HM4CH_PAYLOAD_LEN` 62).
+
+Field byte offsets in the assembled record (`u16` big-endian unless noted; the
+common divisors are UDC/10, IDC/100, PDC/10, YD/1, YT(`u32`)/1000, UAC/10,
+IAC/100, PAC/10, Q/10, F/100, PF/1000, T(`int16`)/10, EVT/1):
+
+| Field | 1ch | 2ch | 4ch |
+| --- | --- | --- | --- |
+| CH1 UDC/IDC/PDC | 2 / 4 / 6 | 2 / 4 / 6 | 2 / 4 / 8 |
+| CH1 YD / YT | 12 / 8 | 22 / 14 | 20 / 12 |
+| CH2 UDC/IDC/PDC | - | 8 / 10 / 12 | =CH1 / 6 / 10 |
+| CH2 YD / YT | - | 24 / 18 | 22 / 16 |
+| CH3 UDC/IDC/PDC | - | - | 24 / 26 / 30 |
+| CH3 YD / YT | - | - | 42 / 34 |
+| CH4 UDC/IDC/PDC | - | - | =CH3 / 28 / 32 |
+| CH4 YD / YT | - | - | 44 / 38 |
+| UAC / F / PAC | 14 / 16 / 18 | 26 / 28 / 30 | 46 / 48 / 50 |
+| Q / IAC / PF | 20 / 22 / 24 | 32 / 34 / 36 | 52 / 54 / 56 |
+| T / EVT | 26 / 28 | 38 / 40 | 58 / 60 |
+
+`=CHn` means the input shares the paired channel's voltage (Ahoy `CALC_UDC_CH`).
+These offsets live in `hm_model_layout()` in `protocol.cpp` and are unit-tested in
+`tests/native/test_protocol.cpp`.

@@ -118,9 +118,8 @@ class HoymilesDtuComponent : public Component,
   void set_last_radio_error_text_sensor(text_sensor::TextSensor *sensor) { last_radio_error_text_sensor_ = sensor; }
 
   void radio_dump();
-  void radio_send_request(const std::string &serial, HmSerialFormat serial_format, uint8_t tx_channel,
-                          int8_t rx_offset, uint16_t rx_window_ms, uint16_t rx_dwell_ms, HmPaLevel pa_level,
-                          uint32_t timestamp);
+  void radio_send_request(const std::string &serial, HmSerialFormat serial_format, uint8_t tx_channel, int8_t rx_offset,
+                          uint16_t rx_window_ms, uint16_t rx_dwell_ms, HmPaLevel pa_level, uint32_t timestamp);
   void radio_send_raw(const std::string &address_hex, uint8_t tx_channel, const std::string &payload_hex,
                       int8_t rx_offset, uint16_t rx_window_ms, uint16_t rx_dwell_ms, HmPaLevel pa_level);
   void radio_listen(uint8_t channel, uint16_t window_ms, uint16_t dwell_ms);
@@ -200,26 +199,21 @@ class HoymilesDtuComponent : public Component,
   uint32_t rx_started_ms_{0};
   uint32_t last_channel_switch_ms_{0};
   uint8_t tx_channel_index_{0};
-  uint8_t tx_attempt_{0};  // acquisition burst attempt counter (0-based) within one poll
+  uint8_t tx_attempt_{0};      // acquisition burst attempt counter (0-based) within one poll
   uint8_t record_attempt_{0};  // whole-record re-request counter when fragments are missing
   uint8_t rx_channel_index_{0};
   uint8_t current_rx_channel_index_{0};
   bool rx_loop_channels_{false};
   bool rx_pendular_{false};
-  uint8_t expected_frames_{7};
+  uint8_t expected_frames_{HM_MAX_FRAME_COUNT};
   uint8_t frame_count_{0};
   uint8_t rx_packet_count_{0};
   uint8_t invalid_frame_count_{0};
   uint8_t duplicate_frame_count_{0};
   uint8_t tx_status_{0};
-  uint8_t tx_observe_{0};
-  uint8_t tx_fifo_status_{0};
   const char *tx_result_{"not sent"};
   volatile bool irq_pending_{false};
   bool irq_attached_{false};
-  uint16_t irq_count_{0};
-  uint16_t rpd_hits_{0};         // DIAG: poll_rx_ samples where nRF RPD (carrier >-64dBm) was high
-  uint8_t rpd_channel_mask_{0};  // DIAG: bit i set if RPD was high while parked on channel index i
   HighFrequencyLoopRequester high_freq_;
   std::array<HmFrame, HM_MAX_FRAME_COUNT> frames_{};
   text_sensor::TextSensor *last_tx_text_sensor_{nullptr};
@@ -228,12 +222,14 @@ class HoymilesDtuComponent : public Component,
   text_sensor::TextSensor *last_radio_error_text_sensor_{nullptr};
 };
 
-template<typename... Ts> class RadioDumpAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+template <typename... Ts>
+class RadioDumpAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
  public:
   void play(const Ts &...x) override { this->parent_->radio_dump(); }
 };
 
-template<typename... Ts> class RadioSendRequestAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+template <typename... Ts>
+class RadioSendRequestAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
  public:
   TEMPLATABLE_VALUE(std::string, serial)
   TEMPLATABLE_VALUE(uint8_t, serial_format)
@@ -245,15 +241,16 @@ template<typename... Ts> class RadioSendRequestAction : public Action<Ts...>, pu
   TEMPLATABLE_VALUE(uint32_t, timestamp)
 
   void play(const Ts &...x) override {
-    this->parent_->radio_send_request(this->serial_.value(x...), static_cast<HmSerialFormat>(this->serial_format_.value(x...)),
-                                      this->tx_channel_.value(x...), this->rx_offset_.value(x...),
-                                      this->rx_window_ms_.value(x...), this->rx_dwell_ms_.value(x...),
-                                      static_cast<HmPaLevel>(this->pa_level_.value(x...)),
-                                      this->timestamp_.value(x...));
+    this->parent_->radio_send_request(
+        this->serial_.value(x...), static_cast<HmSerialFormat>(this->serial_format_.value(x...)),
+        this->tx_channel_.value(x...), this->rx_offset_.value(x...), this->rx_window_ms_.value(x...),
+        this->rx_dwell_ms_.value(x...), static_cast<HmPaLevel>(this->pa_level_.value(x...)),
+        this->timestamp_.value(x...));
   }
 };
 
-template<typename... Ts> class RadioSendRawAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+template <typename... Ts>
+class RadioSendRawAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
  public:
   TEMPLATABLE_VALUE(std::string, address)
   TEMPLATABLE_VALUE(uint8_t, tx_channel)
@@ -270,7 +267,8 @@ template<typename... Ts> class RadioSendRawAction : public Action<Ts...>, public
   }
 };
 
-template<typename... Ts> class RadioListenAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+template <typename... Ts>
+class RadioListenAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
  public:
   TEMPLATABLE_VALUE(uint8_t, channel)
   TEMPLATABLE_VALUE(uint16_t, window_ms)
@@ -281,7 +279,7 @@ template<typename... Ts> class RadioListenAction : public Action<Ts...>, public 
   }
 };
 
-template<typename... Ts>
+template <typename... Ts>
 class RadioSetPowerLimitAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
  public:
   TEMPLATABLE_VALUE(uint16_t, percent)

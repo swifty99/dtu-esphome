@@ -62,8 +62,8 @@ uint16_t hm_crc16(const uint8_t *data, size_t len) {
 
 uint64_t hm_radio_id_from_serial(uint64_t serial) {
   return (static_cast<uint64_t>(serial & 0xFF) << 32) | (static_cast<uint64_t>((serial >> 8) & 0xFF) << 24) |
-         (static_cast<uint64_t>((serial >> 16) & 0xFF) << 16) |
-         (static_cast<uint64_t>((serial >> 24) & 0xFF) << 8) | 0x01ULL;
+         (static_cast<uint64_t>((serial >> 16) & 0xFF) << 16) | (static_cast<uint64_t>((serial >> 24) & 0xFF) << 8) |
+         0x01ULL;
 }
 
 void hm_radio_id_to_address(uint64_t radio_id, uint8_t *address) {
@@ -88,8 +88,8 @@ uint32_t hm_generate_dtu_serial() {
   return dtu_serial;
 }
 
-uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint32_t timestamp,
-                                  uint8_t *buffer, size_t buffer_len) {
+uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint32_t timestamp, uint8_t *buffer,
+                                  size_t buffer_len) {
   if (buffer_len < 27) {
     return 0;
   }
@@ -118,8 +118,8 @@ uint8_t hm_build_realtime_request(uint64_t inverter_radio_id, uint32_t dtu_seria
   return len;
 }
 
-uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent,
-                                     bool persistent, uint8_t *buffer, size_t buffer_len) {
+uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_serial, uint16_t percent, bool persistent,
+                                     uint8_t *buffer, size_t buffer_len) {
   if (buffer_len < 19 || percent > 100) {
     return 0;
   }
@@ -199,50 +199,107 @@ bool hm_assemble_payload(const HmFrame *frames, uint8_t frame_count, uint8_t *pa
   return true;
 }
 
-bool hm_parse_4ch_payload(const uint8_t *payload, uint8_t len, HmTelemetry *telemetry) {
-  // The assembled record is field data starting at byte 0 (offsets below match Ahoy's
-  // hm4chAssignment); it does NOT begin with the 0x0B command byte (that is only in the request).
-  // HM4CH record is 62 field bytes + a trailing CRC16, so 62 is the minimum length.
-  if (payload == nullptr || telemetry == nullptr || len < 62) {
+namespace {
+
+// Byte offsets of one DC channel's fields within the assembled realtime record. SHARED_DC_VOLTAGE
+// means the input shares the previous channel's voltage reading (Ahoy CALC_UDC_CH: on 4-channel
+// inverters the two inputs of an MPPT pair report a single voltage).
+constexpr uint8_t SHARED_DC_VOLTAGE = 0xFF;
+struct HmChannelLayout {
+  uint8_t dc_voltage;
+  uint8_t dc_current;
+  uint8_t dc_power;
+  uint8_t yield_today;
+  uint8_t yield_total;
+};
+
+// Realtime record layout for a model family. Offsets mirror Ahoy src/hm/hmDefines.h
+// hm{1,2,4}chAssignment (verified on-air against an HM-1200). min_len is the field-byte count that
+// must be present before the record's trailing CRC16.
+struct HmModelLayout {
+  uint8_t channel_count;
+  uint8_t min_len;
+  uint8_t ac_voltage;
+  uint8_t ac_current;
+  uint8_t ac_power;
+  uint8_t reactive_power;
+  uint8_t ac_frequency;
+  uint8_t power_factor;
+  uint8_t temperature;
+  uint8_t event_code;
+  HmChannelLayout channels[HM_MAX_CHANNELS];
+};
+
+constexpr HmModelLayout HM_1CH_LAYOUT = {1, 30, 14, 22, 18, 20, 16, 24, 26, 28, {{2, 4, 6, 12, 8}, {}, {}, {}}};
+constexpr HmModelLayout HM_2CH_LAYOUT = {
+    2, 42, 26, 34, 30, 32, 28, 36, 38, 40, {{2, 4, 6, 22, 14}, {8, 10, 12, 24, 18}, {}, {}}};
+constexpr HmModelLayout HM_4CH_LAYOUT = {
+    4,
+    62,
+    46,
+    54,
+    50,
+    52,
+    48,
+    56,
+    58,
+    60,
+    {{2, 4, 8, 20, 12}, {SHARED_DC_VOLTAGE, 6, 10, 22, 16}, {24, 26, 30, 42, 34}, {SHARED_DC_VOLTAGE, 28, 32, 44, 38}}};
+
+const HmModelLayout *hm_model_layout(HmModel model) {
+  switch (model) {
+    case HM_300:
+    case HM_350:
+    case HM_400:
+      return &HM_1CH_LAYOUT;
+    case HM_600:
+    case HM_700:
+    case HM_800:
+      return &HM_2CH_LAYOUT;
+    case HM_1000:
+    case HM_1200:
+    case HM_1500:
+      return &HM_4CH_LAYOUT;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+uint8_t hm_model_channel_count(HmModel model) {
+  const HmModelLayout *layout = hm_model_layout(model);
+  return layout == nullptr ? 0 : layout->channel_count;
+}
+
+bool hm_parse_realtime_payload(HmModel model, const uint8_t *payload, uint8_t len, HmTelemetry *telemetry) {
+  // The assembled record is field data starting at byte 0 (it does NOT begin with the 0x0B command
+  // byte, which only appears in the request). Per-model offsets come from the layout table above.
+  const HmModelLayout *layout = hm_model_layout(model);
+  if (payload == nullptr || telemetry == nullptr || layout == nullptr || len < layout->min_len) {
     return false;
   }
   HmTelemetry out;
-  out.channels[0].dc_voltage = read_u16_be(payload, 2) / 10.0f;
-  out.channels[0].dc_current = read_u16_be(payload, 4) / 100.0f;
-  out.channels[0].dc_power = read_u16_be(payload, 8) / 10.0f;
-  out.channels[0].yield_today = read_u16_be(payload, 20);
-  out.channels[0].yield_total = read_u32_be(payload, 12) / 1000.0f;
-
-  out.channels[1].dc_voltage = out.channels[0].dc_voltage;
-  out.channels[1].dc_current = read_u16_be(payload, 6) / 100.0f;
-  out.channels[1].dc_power = read_u16_be(payload, 10) / 10.0f;
-  out.channels[1].yield_today = read_u16_be(payload, 22);
-  out.channels[1].yield_total = read_u32_be(payload, 16) / 1000.0f;
-
-  out.channels[2].dc_voltage = read_u16_be(payload, 24) / 10.0f;
-  out.channels[2].dc_current = read_u16_be(payload, 26) / 100.0f;
-  out.channels[2].dc_power = read_u16_be(payload, 30) / 10.0f;
-  out.channels[2].yield_today = read_u16_be(payload, 42);
-  out.channels[2].yield_total = read_u32_be(payload, 34) / 1000.0f;
-
-  out.channels[3].dc_voltage = out.channels[2].dc_voltage;
-  out.channels[3].dc_current = read_u16_be(payload, 28) / 100.0f;
-  out.channels[3].dc_power = read_u16_be(payload, 32) / 10.0f;
-  out.channels[3].yield_today = read_u16_be(payload, 44);
-  out.channels[3].yield_total = read_u32_be(payload, 38) / 1000.0f;
-
-  out.ac_voltage = read_u16_be(payload, 46) / 10.0f;
-  out.ac_frequency = read_u16_be(payload, 48) / 100.0f;
-  out.ac_power = read_u16_be(payload, 50) / 10.0f;
-  out.reactive_power = read_u16_be(payload, 52) / 10.0f;
-  out.ac_current = read_u16_be(payload, 54) / 100.0f;
-  out.power_factor = read_u16_be(payload, 56) / 1000.0f;
-  out.temperature = static_cast<int16_t>(read_u16_be(payload, 58)) / 10.0f;
-  out.event_code = read_u16_be(payload, 60);
-  for (const auto &channel : out.channels) {
-    out.yield_today += channel.yield_today;
-    out.yield_total += channel.yield_total;
+  float previous_dc_voltage = 0.0f;
+  for (uint8_t c = 0; c < layout->channel_count; c++) {
+    const HmChannelLayout &ch = layout->channels[c];
+    previous_dc_voltage =
+        ch.dc_voltage == SHARED_DC_VOLTAGE ? previous_dc_voltage : read_u16_be(payload, ch.dc_voltage) / 10.0f;
+    out.channels[c].dc_voltage = previous_dc_voltage;
+    out.channels[c].dc_current = read_u16_be(payload, ch.dc_current) / 100.0f;
+    out.channels[c].dc_power = read_u16_be(payload, ch.dc_power) / 10.0f;
+    out.channels[c].yield_today = read_u16_be(payload, ch.yield_today);
+    out.channels[c].yield_total = read_u32_be(payload, ch.yield_total) / 1000.0f;
+    out.yield_today += out.channels[c].yield_today;
+    out.yield_total += out.channels[c].yield_total;
   }
+  out.ac_voltage = read_u16_be(payload, layout->ac_voltage) / 10.0f;
+  out.ac_frequency = read_u16_be(payload, layout->ac_frequency) / 100.0f;
+  out.ac_power = read_u16_be(payload, layout->ac_power) / 10.0f;
+  out.reactive_power = read_u16_be(payload, layout->reactive_power) / 10.0f;
+  out.ac_current = read_u16_be(payload, layout->ac_current) / 100.0f;
+  out.power_factor = read_u16_be(payload, layout->power_factor) / 1000.0f;
+  out.temperature = static_cast<int16_t>(read_u16_be(payload, layout->temperature)) / 10.0f;
+  out.event_code = read_u16_be(payload, layout->event_code);
   out.valid = true;
   *telemetry = out;
   return true;
@@ -250,6 +307,20 @@ bool hm_parse_4ch_payload(const uint8_t *payload, uint8_t len, HmTelemetry *tele
 
 const char *hm_model_to_string(HmModel model) {
   switch (model) {
+    case HM_300:
+      return "HM-300";
+    case HM_350:
+      return "HM-350";
+    case HM_400:
+      return "HM-400";
+    case HM_600:
+      return "HM-600";
+    case HM_700:
+      return "HM-700";
+    case HM_800:
+      return "HM-800";
+    case HM_1000:
+      return "HM-1000";
     case HM_1200:
       return "HM-1200";
     case HM_1500:

@@ -37,7 +37,6 @@ static constexpr uint8_t NRF_REG_OBSERVE_TX = 0x08;
 static constexpr uint8_t NRF_REG_FIFO_STATUS = 0x17;
 static constexpr uint8_t NRF_REG_DYNPD = 0x1C;
 static constexpr uint8_t NRF_REG_FEATURE = 0x1D;
-static constexpr uint8_t NRF_REG_RPD = 0x09;
 
 static constexpr uint8_t NRF_CONFIG_EN_CRC = 0x08;
 static constexpr uint8_t NRF_CONFIG_CRCO = 0x04;
@@ -312,8 +311,8 @@ void HoymilesDtuComponent::radio_send_request(const std::string &serial, HmSeria
 }
 
 void HoymilesDtuComponent::radio_send_raw(const std::string &address_hex, uint8_t tx_channel,
-                                          const std::string &payload_hex, int8_t rx_offset,
-                                          uint16_t rx_window_ms, uint16_t rx_dwell_ms, HmPaLevel pa_level) {
+                                          const std::string &payload_hex, int8_t rx_offset, uint16_t rx_window_ms,
+                                          uint16_t rx_dwell_ms, HmPaLevel pa_level) {
   if (!radio_ok_) {
     debug_publish_error_("radio not ready");
     return;
@@ -483,11 +482,9 @@ void HoymilesDtuComponent::begin_exchange_() { high_freq_.start(); }
 void HoymilesDtuComponent::end_exchange_() { high_freq_.stop(); }
 
 void HoymilesDtuComponent::consume_irq_() {
-  if (!irq_pending_) {
-    return;
-  }
+  // The nRF IRQ only wakes the loop promptly; poll_tx_/poll_rx_ read STATUS directly, so there is no
+  // per-IRQ work to do here beyond clearing the ISR flag.
   irq_pending_ = false;
-  irq_count_++;
 }
 
 void IRAM_ATTR HoymilesDtuComponent::irq_handler_(HoymilesDtuComponent *arg) {
@@ -507,13 +504,8 @@ void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_
   invalid_frame_count_ = 0;
   duplicate_frame_count_ = 0;
   tx_status_ = 0;
-  tx_observe_ = 0;
-  tx_fifo_status_ = 0;
   tx_result_ = "no ack";
-  irq_count_ = 0;
   irq_pending_ = false;
-  rpd_hits_ = 0;
-  rpd_channel_mask_ = 0;
   tx_attempt_ = 0;
   begin_exchange_();
 
@@ -581,8 +573,6 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
     // ACK from the inverter: it received the request and will stream data frames. Listen now.
     set_ce_(false);
     tx_status_ = status;
-    tx_observe_ = read_register_(NRF_REG_OBSERVE_TX);
-    tx_fifo_status_ = read_register_(NRF_REG_FIFO_STATUS);
     tx_result_ = "TX_DS";
     clear_status_(NRF_STATUS_TX_DS);
     ESP_LOGD(TAG, "TX_DS ch=%u attempt=%u", HM_RF_CHANNELS[tx_channel_index_], tx_attempt_);
@@ -597,8 +587,6 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
     // rather than waiting a whole poll interval, so we sweep the inverter's listen window fast.
     set_ce_(false);
     tx_status_ = status;
-    tx_observe_ = read_register_(NRF_REG_OBSERVE_TX);
-    tx_fifo_status_ = read_register_(NRF_REG_FIFO_STATUS);
     tx_result_ = max_rt ? "MAX_RT" : "timeout";
     clear_status_(NRF_STATUS_MAX_RT);
     command_(NRF_FLUSH_TX);
@@ -612,10 +600,6 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
 
 void HoymilesDtuComponent::poll_rx_(uint32_t now) {
   read_available_packets_();
-  if ((read_register_(NRF_REG_RPD) & 0x01) != 0) {  // DIAG: carrier >-64dBm on current channel
-    rpd_hits_++;
-    rpd_channel_mask_ |= static_cast<uint8_t>(1u << current_rx_channel_index_);
-  }
   if (process_response_(now)) {
     finish_request_(true, "", now);
     return;
@@ -672,18 +656,16 @@ void HoymilesDtuComponent::log_exchange_summary_(bool success, const char *error
   const uint64_t serial = active_inverter_ == nullptr ? 0 : active_inverter_->get_serial();
   if (success) {
     ESP_LOGI(TAG,
-             "Exchange %012llX complete: tx_ch=%u tx=%s status=0x%02X observe=0x%02X fifo=0x%02X "
-             "rx_start=%u packets=%u accepted=%u invalid=%u duplicate=%u irq=%u rpd=%u rpdmask=0x%02X duration=%ums",
-             serial, tx_channel, tx_result_, tx_status_, tx_observe_, tx_fifo_status_, rx_channel, rx_packet_count_,
-             frame_count_, invalid_frame_count_, duplicate_frame_count_, irq_count_, rpd_hits_, rpd_channel_mask_,
-             duration_ms);
+             "Exchange %012llX complete: tx_ch=%u tx=%s rx_start=%u packets=%u accepted=%u invalid=%u "
+             "duplicate=%u duration=%ums",
+             serial, tx_channel, tx_result_, rx_channel, rx_packet_count_, frame_count_, invalid_frame_count_,
+             duplicate_frame_count_, duration_ms);
   } else {
     ESP_LOGW(TAG,
-             "Exchange %012llX failed: reason=%s tx_ch=%u tx=%s status=0x%02X observe=0x%02X fifo=0x%02X "
-             "rx_start=%u packets=%u accepted=%u invalid=%u duplicate=%u irq=%u rpd=%u rpdmask=0x%02X duration=%ums",
-             serial, result, tx_channel, tx_result_, tx_status_, tx_observe_, tx_fifo_status_, rx_channel,
-             rx_packet_count_, frame_count_, invalid_frame_count_, duplicate_frame_count_, irq_count_, rpd_hits_,
-             rpd_channel_mask_, duration_ms);
+             "Exchange %012llX failed: reason=%s tx_ch=%u tx=%s status=0x%02X rx_start=%u packets=%u accepted=%u "
+             "invalid=%u duplicate=%u duration=%ums",
+             serial, result, tx_channel, tx_result_, tx_status_, rx_channel, rx_packet_count_, frame_count_,
+             invalid_frame_count_, duplicate_frame_count_, duration_ms);
   }
 }
 
@@ -870,10 +852,10 @@ void HoymilesDtuComponent::debug_publish_register_dump_() {
            "RF_CH=%u RF_SETUP=0x%02X OBSERVE_TX=0x%02X FIFO=0x%02X DYNPD=0x%02X FEATURE=0x%02X "
            "RX_P0=%s RX_P1=%s TX=%s",
            read_register_(NRF_REG_STATUS), read_register_(NRF_REG_CONFIG), read_register_(NRF_REG_EN_AA),
-           read_register_(NRF_REG_EN_RXADDR), read_register_(NRF_REG_SETUP_AW),
-           read_register_(NRF_REG_SETUP_RETR), read_register_(NRF_REG_RF_CH), read_register_(NRF_REG_RF_SETUP),
-           read_register_(NRF_REG_OBSERVE_TX), read_register_(NRF_REG_FIFO_STATUS), read_register_(NRF_REG_DYNPD),
-           read_register_(NRF_REG_FEATURE), rx_p0_hex, rx_p1_hex, tx_hex);
+           read_register_(NRF_REG_EN_RXADDR), read_register_(NRF_REG_SETUP_AW), read_register_(NRF_REG_SETUP_RETR),
+           read_register_(NRF_REG_RF_CH), read_register_(NRF_REG_RF_SETUP), read_register_(NRF_REG_OBSERVE_TX),
+           read_register_(NRF_REG_FIFO_STATUS), read_register_(NRF_REG_DYNPD), read_register_(NRF_REG_FEATURE),
+           rx_p0_hex, rx_p1_hex, tx_hex);
   ESP_LOGI(TAG, "Debug nRF dump %s", dump);
   if (last_register_dump_text_sensor_ != nullptr) {
     last_register_dump_text_sensor_->publish_state(dump);
@@ -897,20 +879,20 @@ bool HoymilesDtuComponent::process_response_(uint32_t now) {
     return false;
   }
   HmTelemetry telemetry;
-  if (!hm_parse_4ch_payload(payload, payload_len, &telemetry)) {
+  if (!hm_parse_realtime_payload(active_inverter_->get_model(), payload, payload_len, &telemetry)) {
     active_inverter_->set_last_error("payload parse failed");
     return false;
   }
+  float dc_power = 0.0f;
+  for (uint8_t c = 0; c < hm_model_channel_count(active_inverter_->get_model()); c++) {
+    dc_power += telemetry.channels[c].dc_power;
+  }
   ESP_LOGI(TAG,
-           "Telemetry %012llX: AC %.1fV %.2fHz %.1fW %.2fA %.1fvar pf=%.2f | DC %.1fW (ch %.1f/%.1f/%.1f/%.1f) | "
-           "%.1f°C | YieldToday %.0fWh YieldTotal %.3fkWh | evt=%u",
+           "Telemetry %012llX: AC %.1fV %.2fHz %.1fW %.2fA %.1fvar pf=%.2f | DC %.1fW | %.1f°C | "
+           "YieldToday %.0fWh YieldTotal %.3fkWh | evt=%u",
            active_inverter_->get_serial(), telemetry.ac_voltage, telemetry.ac_frequency, telemetry.ac_power,
-           telemetry.ac_current, telemetry.reactive_power, telemetry.power_factor,
-           telemetry.channels[0].dc_power + telemetry.channels[1].dc_power + telemetry.channels[2].dc_power +
-               telemetry.channels[3].dc_power,
-           telemetry.channels[0].dc_power, telemetry.channels[1].dc_power, telemetry.channels[2].dc_power,
-           telemetry.channels[3].dc_power, telemetry.temperature, telemetry.yield_today, telemetry.yield_total,
-           telemetry.event_code);
+           telemetry.ac_current, telemetry.reactive_power, telemetry.power_factor, dc_power, telemetry.temperature,
+           telemetry.yield_today, telemetry.yield_total, telemetry.event_code);
   active_inverter_->publish_telemetry(telemetry, now);
   return true;
 }
@@ -921,8 +903,6 @@ void HoymilesDtuComponent::begin_rx_window_(uint32_t now) {
   current_rx_channel_index_ = rx_channel_index_;
   rx_loop_channels_ = false;
   rx_pendular_ = false;
-  rpd_hits_ = 0;
-  rpd_channel_mask_ = 0;
   start_listening_(HM_RF_CHANNELS[current_rx_channel_index_]);
   request_state_ = RequestState::RX_ACTIVE;
 }

@@ -78,7 +78,8 @@ def build_realtime_request(
 ) -> bytes:
     buffer = bytearray(27)
     buffer[0] = 0x15
-    # Wire byte order must match Ahoy exactly — see hm_build_realtime_request in protocol.cpp.
+    # Wire byte order must match Ahoy exactly — see hm_build_realtime_request
+    # in protocol.cpp.
     buffer[1:5] = (inverter_radio_id >> 8).to_bytes(4, "little")
     buffer[5:9] = dtu_serial.to_bytes(4, "big")
     buffer[9] = 0x80

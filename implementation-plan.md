@@ -9,17 +9,26 @@ config schemas rather than porting upstream application structure.
 
 ## Current State
 
-Implemented as of 2026-06-27:
+Implemented as of 2026-07-01:
 
 - `hoymiles_dtu` hub with ESPHome SPI, `cs_pin`, `ce_pin`, optional `irq_pin`,
   `poll_interval`, `pa_level`, and one or more inverter definitions.
 - nRF24 probe/init using 1 MHz SPI mode 0, 250 kbps RF, CRC16, dynamic payloads,
   5-byte addresses, and the HM channel set.
-- HM-1200/HM-1500 4-channel read-only realtime telemetry request and parser.
-- `sensor` platform for AC values, DC channel values, and yields.
-- `text_sensor` platform for status and last seen.
-- Python protocol helpers and unit/config tests.
-- Compile fixtures for ESP32 and ESP32-S3 on Arduino and ESP-IDF.
+- Standalone link acquisition (Ahoy-style burst retransmit) + realtime telemetry
+  request and parser, **verified on a live HM-1200**.
+- All HM channel families like Ahoy: 1-channel HM-300/350/400, 2-channel
+  HM-600/700/800, 4-channel HM-1000/1200/1500, via a table-driven per-model
+  decoder (`hm_model_layout` in `protocol.cpp`).
+- Active-power-limit DevControl command with inverter ack verification.
+- `sensor` platform for AC values (incl. reactive power / power factor), DC
+  channel values, and yields.
+- `text_sensor` platform for status/last-seen and radio diagnostics.
+- Native C++ unit tests (`tests/native/test_protocol.cpp`) exercising the real
+  decoder for 1/2/4-channel layouts plus a real captured HM-1200 record, run via
+  `pytest`; Python protocol/CRC and ESPHome config tests.
+- Compile fixtures for ESP32/ESP32-S3 on Arduino/ESP-IDF, plus a multi-model
+  fixture.
 - Manual HIL config/checklist in `tests/manual/hm4_readonly/`.
 
 ## Scope
@@ -65,6 +74,12 @@ Acceptance:
 
 Goal: support the common HM 1-, 2-, and 4-channel model families with shared
 protocol code and model-specific payload layouts.
+
+Status (2026-07-01): done in code. All three families are modelled by
+`hm_model_layout` in `protocol.cpp` (offsets from Ahoy `hm{1,2,4}chAssignment`)
+and unit-tested in `tests/native/test_protocol.cpp`, including a real captured
+HM-1200 record. Live HIL for a 1-channel and 2-channel inverter still pending
+hardware.
 
 Tasks:
 
