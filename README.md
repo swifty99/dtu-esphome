@@ -1,18 +1,20 @@
 # ESPHome Hoymiles DTU
 
-External ESPHome component for Hoymiles HM-series inverters using an
-nRF24L01+ radio.
+External ESPHome component that talks directly to Hoymiles HM-series
+microinverters over an nRF24L01+ radio — no Ahoy, no vendor DTU, no cloud.
+It reads live AC/DC telemetry and can send an active-power-limit command.
 
 ## Status
 
-This project is alpha-stage and HM-only. It reads live telemetry over nRF24 and
-supports an active-power-limit command. On/off, restart, and hardened
-multi-inverter scheduling are planned later.
+Alpha-stage, HM-only. Standalone telemetry (link acquisition, fragment
+reassembly, per-model decode) and the active-power-limit command are verified
+on hardware against a live HM-1200. On/off, restart, and multi-inverter
+scheduling beyond "one at a time" are not implemented yet.
 
 ### Supported models
 
 Same HM microinverter families Ahoy handles over nRF24, grouped by DC-input
-(channel) count:
+(channel) count — the realtime payload layout only depends on this count:
 
 | Channels | Models (`model:` value) |
 | --- | --- |
@@ -20,16 +22,33 @@ Same HM microinverter families Ahoy handles over nRF24, grouped by DC-input
 | 2 | HM-600 (`hm_600`), HM-700 (`hm_700`), HM-800 (`hm_800`) |
 | 4 | HM-1000 (`hm_1000`), HM-1200 (`hm_1200`), HM-1500 (`hm_1500`) |
 
-Standalone telemetry is verified on hardware against an HM-1200. HMS/HMT
-inverters and CMT2300A radios are out of scope for this repo.
+HMS/HMT inverters and CMT2300A radios are out of scope for this repo.
 
-## Minimal Configuration
+## Hardware
+
+Any nRF24L01+ module wired to your ESP's SPI bus, plus two dedicated GPIOs:
+
+- **SCK / MOSI / MISO** — shared SPI bus, declared once under the standard
+  ESPHome `spi:` component.
+- **CS** — chip-select, declared under `spi_id:`/`cs_pin:` like any other SPI
+  device.
+- **CE** (`ce_pin:`) — radio chip-enable, required.
+- **IRQ** (`irq_pin:`) — optional. If wired to an internal GPIO, RX/TX
+  completion is interrupt-driven; otherwise the component falls back to
+  high-frequency polling during an exchange. Either way, the ESPHome loop is
+  never blocked waiting on the radio.
+
+## Installation
 
 ```yaml
 external_components:
   - source: github://swifty99/dtu-esphome
     components: [hoymiles_dtu]
+```
 
+## Minimal configuration
+
+```yaml
 spi:
   id: dtu_spi
   clk_pin: GPIO5
@@ -46,7 +65,219 @@ hoymiles_dtu:
     - id: hm4
       serial: "114180000000"
       model: hm_1500
+
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power:
+      name: "HM4 AC Power"
 ```
+
+## Configuration reference
+
+### `hoymiles_dtu:` (hub)
+
+The hub owns the nRF24 radio and polls each configured inverter in turn; it
+is a standard ESPHome `PollingComponent`, so it accepts the usual
+`update_interval:` alongside its own options.
+
+- **`ce_pin`** (**Required**, pin schema): radio chip-enable GPIO.
+- `irq_pin` (*Optional*, pin schema): radio IRQ GPIO. Must be an internal
+  GPIO to get interrupt-driven wakeup; any other pin (or omitting it) falls
+  back to polling.
+- `pa_level` (*Optional*, one of `min` / `low` / `high` / `max`, default
+  `low`): nRF24 PA/LNA transmit power. Standalone (no Ahoy) links have been
+  validated on hardware at `max` for a marginal link; raise it if telemetry
+  polls are failing to acquire.
+- `update_interval` (*Optional*, default `15s`): how often each inverter is
+  polled for telemetry.
+- **`inverters`** (**Required**, list, at least one): the inverters this hub
+  talks to. See below.
+- Also accepts the standard SPI device options (`spi_id`, `cs_pin`,
+  `data_rate`, `spi_mode`, ...).
+
+### `inverters:` (list, under `hoymiles_dtu:`)
+
+- **`id`** (**Required**, ID): used to attach `sensor:`/`text_sensor:`
+  entities to this inverter.
+- **`serial`** (**Required**, string): the inverter's printed serial number,
+  as **12 decimal digits**. It is interpreted as **packed BCD**, exactly like
+  Ahoy — the printed digits map straight onto the radio address bytes. This
+  is *not* the same as parsing the serial as a plain decimal number; doing
+  that would compute the wrong nRF address and the inverter would never
+  respond. Just copy the digits off the inverter's label.
+- **`model`** (**Required**, one of the `model:` values in the table above).
+
+### `sensor:` platform
+
+Keyed by `inverter_id`. All keys are optional — only declare the sensors you
+want:
+
+```yaml
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power: {name: "HM4 AC Power"}
+    ac_voltage: {name: "HM4 AC Voltage"}
+    ac_current: {name: "HM4 AC Current"}
+    ac_frequency: {name: "HM4 AC Frequency"}
+    reactive_power: {name: "HM4 Reactive Power"}
+    power_factor: {name: "HM4 Power Factor"}
+    temperature: {name: "HM4 Temperature"}
+    yield_today: {name: "HM4 Yield Today"}
+    yield_total: {name: "HM4 Yield Total"}
+    channels:
+      - number: 1
+        dc_voltage: {name: "HM4 CH1 DC Voltage"}
+        dc_current: {name: "HM4 CH1 DC Current"}
+        dc_power: {name: "HM4 CH1 DC Power"}
+        yield_today: {name: "HM4 CH1 Yield Today"}
+```
+
+`channels` is a list of per-DC-input entries; `number` (1-4, **Required**)
+should match the inverter's model channel count (1/2/4) — there is no
+separate validation error for a mismatch, but any `number` beyond what the
+model actually reports publishes `NaN` instead of a real reading.
+
+### `text_sensor:` platform
+
+Two independent groups, selected by which ID you key the block on:
+
+```yaml
+text_sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    status: {name: "HM4 Status"}       # "offline" / "online" / "producing"
+    last_seen: {name: "HM4 Last Seen"} # seconds since the last good telemetry
+
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    last_rx_payload: {name: "DTU Last RX Payload"}   # hex dump, diagnostic
+    last_radio_error: {name: "DTU Last Radio Error"} # diagnostic
+```
+
+`status`/`last_seen` require `inverter_id`; `last_rx_payload`/
+`last_radio_error` are hub-level radio diagnostics and require `dtu_id`.
+At least one of `inverter_id`/`dtu_id` is required per block.
+
+### Actions
+
+**`hoymiles_dtu.radio_set_power_limit`** — sets the inverter's active-power
+limit via the DevControl protocol path. Non-blocking: it queues onto the same
+request state machine telemetry polling uses, so calling it never stalls the
+ESPHome loop, and it's automatically deferred if a telemetry exchange is
+already in flight.
+
+- `id` (**Required**): the `hoymiles_dtu:` hub to target.
+- `percent` (*Optional*, 0-100, default `100`, templatable): relative power
+  limit.
+- `persistent` (*Optional*, boolean, default `true`, templatable): `true`
+  survives an inverter restart/grid dropout; `false` reverts on the next
+  power cycle.
+
+```yaml
+button:
+  - platform: template
+    name: "Limit to 80%"
+    on_press:
+      - hoymiles_dtu.radio_set_power_limit:
+          id: dtu
+          percent: 80
+          persistent: false
+```
+
+Only the first configured inverter can currently be targeted by this action
+(single-inverter limitation, matching how the DevControl exchange is wired
+today).
+
+## How the HM RF protocol works
+
+This section is for anyone extending the component or debugging a link that
+won't acquire. All of it is implemented in `components/hoymiles_dtu/protocol.{h,cpp}`
+(pure protocol/codec, unit-tested, no ESPHome or radio-hardware dependency)
+and `hoymiles_dtu.cpp` (the radio driver + async state machine).
+
+### The physical link
+
+HM inverters use a Nordic nRF24L01+ compatible radio at 250 kbps, CRC16,
+5-byte addresses, and dynamic (auto-sized) payloads — the same config Ahoy
+uses. Instead of a single fixed channel, the link hops across five 2.4 GHz
+channels — `{3, 23, 40, 61, 75}` — so both sides need to agree on *where* to
+be listening at any given moment, not just how to encode a byte.
+
+### Addressing
+
+Both the DTU and every inverter have a 5-byte nRF radio address derived from
+a serial number: byte 0 is always `0x01`, and bytes 1-4 are the serial's low
+32 bits, byte-reversed (`hm_radio_id_from_serial` in `protocol.cpp`). The
+important, easy-to-get-wrong part: the *printed* inverter serial is **packed
+BCD**, not a decimal integer — e.g. printed serial `116182806989` produces
+radio address `01 82 80 69 89`, but naively parsing it as decimal-116182806989
+computes a completely different (wrong) address that the inverter will never
+answer to. This bit the project early on; `validate_serial` in `__init__.py`
+and `parse_serial_bcd` in `protocol.py` exist specifically to keep it correct.
+
+### The telemetry exchange
+
+1. The DTU picks a channel and transmits a realtime-data request: command
+   byte `0x15`, with a request-type byte `0x0B` further into the payload,
+   both the inverter's and the DTU's radio-address bytes embedded (so the
+   inverter can verify it's being addressed and knows where to reply), a
+   timestamp, and a CRC16 + CRC8 trailer (`hm_build_realtime_request`).
+2. The inverter's radio auto-ACKs at the hardware level (`TX_DS`) — this
+   confirms delivery but not that the inverter accepted the request.
+3. The inverter then transmits its reply as a run of fragments, one per
+   packet, each stamped `command = 0x95` (`0x15 | 0x80`, "all frames") and a
+   1-based fragment ID in the low 7 bits of a header byte; the *last*
+   fragment additionally sets that byte's top bit so the DTU knows the
+   record is complete without needing a fixed fragment count (`hm_parse_frame`).
+   These land on a channel offset **+3** from the request channel, so after
+   sending, the DTU jumps there to listen.
+4. The DTU reassembles fragments by ID (`hm_assemble_payload`) and, once it
+   has every fragment up to the one with the "last" bit set, decodes the
+   payload with a table keyed by the inverter's channel-count family
+   (1/2/4-channel HM models each have a different byte layout for AC/DC
+   fields — see `hm_model_layout` in `protocol.cpp`).
+
+If the inverter never ACKs, the DTU retransmits on the next channel in the
+hop sequence rather than waiting out a full poll interval — an acquisition
+burst, up to 30 attempts, mirroring Ahoy's own retransmit cadence. If the ACK
+lands but fragments are incomplete when the RX window closes, the DTU
+re-requests the whole record (up to 4 times) rather than giving up — every
+frame it already has is kept, only the missing ones need to reappear.
+
+### Never blocks the ESPHome loop
+
+All of the above — acquisition burst with channel rotation, the RX pendulum/
+sweep search for the reply, fragment reassembly, whole-record re-request —
+runs as an explicit state machine (`RequestState::{IDLE,WAIT_TX_IRQ,RX_ACTIVE}`)
+driven a step at a time from `loop()`, with `update()` (the `PollingComponent`
+tick) only responsible for starting the next telemetry exchange when idle and
+due. Nothing in the radio path calls `delay()`.
+
+### The power-limit path
+
+`radio_set_power_limit` builds a DevControl request instead (command `0x51`,
+a single-frame flag rather than "all frames", the `ActivePowerContr` sub-code,
+the requested percentage ×10, and a persistent/non-persistent flag —
+`hm_build_power_limit_request`). It reuses the exact same TX burst and
+channel-rotation machinery as telemetry (`ExchangeKind::DEV_CONTROL` instead
+of `ExchangeKind::TELEMETRY`), but the RX side is deliberately simpler: the
+inverter replies with exactly one confirmation frame (`0xD1`), so the DTU
+parks on the `+3`-offset channel and waits — no pendulum, no sweep, because
+there's only one frame and one chance to be on the right channel. Acceptance
+is decided the same way Ahoy's `parseDevCtrl` does (specific bytes in the
+confirmation frame both zero).
+
+Because that confirmation is a single unhopped frame, it's structurally less
+redundant than the multi-fragment telemetry exchange. In hardware testing,
+`TX_DS` (radio-level ACK — the inverter definitely received the command) has
+been 100% reliable, while the RX confirmation occasionally doesn't arrive
+within the listen window even though the command almost certainly landed;
+you may see a log line like `... -> no confirmation frame` on an otherwise
+healthy link. That's read as an inherent limitation of a single unhopped
+confirmation frame, not a bug — nothing about the change itself is rolled
+back by a missed confirmation.
 
 ## Development
 
@@ -54,6 +285,13 @@ Run local checks with:
 
 ```sh
 pre-commit run --all-files
+```
+
+Run the unit tests (native C++ decoder tests, protocol tests, and — with
+`esphome` installed — config validation) with:
+
+```sh
+pytest tests/unit
 ```
 
 Compile the minimal fixture with:
