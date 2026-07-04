@@ -12,7 +12,7 @@ config schemas rather than porting upstream application structure.
 Implemented as of 2026-07-01:
 
 - `hoymiles_dtu` hub with ESPHome SPI, `cs_pin`, `ce_pin`, optional `irq_pin`,
-  `poll_interval`, `pa_level`, and one or more inverter definitions.
+  `update_interval`, `pa_level`, and one or more inverter definitions.
 - nRF24 probe/init using 1 MHz SPI mode 0, 250 kbps RF, CRC16, dynamic payloads,
   5-byte addresses, and the HM channel set.
 - Standalone link acquisition (Ahoy-style burst retransmit) + realtime telemetry
@@ -159,7 +159,7 @@ Acceptance:
   be proven by compile tests.
 
 ## Reference Policy
-t
+
 - Ahoy is the communication reference for HM/nRF24 behavior.
 - Store findings in `components/hoymiles_dtu/REFERENCE_NOTES.md`.
 - Do not copy Ahoy source into this repo unless licensing is revisited.

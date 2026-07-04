@@ -8,10 +8,8 @@ from .const import (
     CONF_DTU_ID,
     CONF_INVERTER_ID,
     CONF_LAST_RADIO_ERROR,
-    CONF_LAST_REGISTER_DUMP,
     CONF_LAST_RX_PAYLOAD,
     CONF_LAST_SEEN,
-    CONF_LAST_TX,
     CONF_STATUS,
 )
 
@@ -25,13 +23,7 @@ INVERTER_TEXT_SENSOR_TYPES = {
 }
 
 DTU_TEXT_SENSOR_TYPES = {
-    CONF_LAST_TX: text_sensor.text_sensor_schema(
-        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-    ),
     CONF_LAST_RX_PAYLOAD: text_sensor.text_sensor_schema(
-        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-    ),
-    CONF_LAST_REGISTER_DUMP: text_sensor.text_sensor_schema(
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
     ),
     CONF_LAST_RADIO_ERROR: text_sensor.text_sensor_schema(

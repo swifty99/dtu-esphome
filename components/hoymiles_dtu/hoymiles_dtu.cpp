@@ -33,7 +33,6 @@ static constexpr uint8_t NRF_REG_STATUS = 0x07;
 static constexpr uint8_t NRF_REG_RX_ADDR_P0 = 0x0A;
 static constexpr uint8_t NRF_REG_RX_ADDR_P1 = 0x0B;
 static constexpr uint8_t NRF_REG_TX_ADDR = 0x10;
-static constexpr uint8_t NRF_REG_OBSERVE_TX = 0x08;
 static constexpr uint8_t NRF_REG_FIFO_STATUS = 0x17;
 static constexpr uint8_t NRF_REG_DYNPD = 0x1C;
 static constexpr uint8_t NRF_REG_FEATURE = 0x1D;
@@ -51,32 +50,13 @@ static constexpr uint32_t TX_TIMEOUT_MS = 100;
 static constexpr uint32_t RX_TIMEOUT_MS = 520;
 static constexpr uint32_t RX_INITIAL_PENDULUM_MS = 85;
 static constexpr uint32_t RX_CHANNEL_DWELL_MS = 5;
-static constexpr uint16_t DEBUG_MAX_WINDOW_MS = 5000;
 // Acquisition burst: on no-ACK we retransmit immediately on the next channel (non-blocking, one
 // attempt per loop iteration) up to this many times before giving up for this poll. ~MAX/5 full
-// channel sweeps; with a tight poll_interval this approximates Ahoy's steady retransmit cadence.
+// channel sweeps; with a tight update_interval this approximates Ahoy's steady retransmit cadence.
 static constexpr uint8_t MAX_TX_ATTEMPTS = 30;
 // On a partial record (link is up, some fragments missing), re-request the whole record this many
 // times before failing the exchange. Each re-request keeps already-received fragments.
 static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
-
-static void format_hex_(const uint8_t *data, uint8_t len, char *buffer, size_t buffer_len) {
-  if (buffer_len == 0) {
-    return;
-  }
-  size_t pos = 0;
-  for (uint8_t i = 0; i < len && pos + 3 < buffer_len; i++) {
-    const int written = snprintf(&buffer[pos], buffer_len - pos, "%02X", data[i]);
-    if (written <= 0) {
-      break;
-    }
-    pos += written;
-    if (i + 1 < len && pos + 2 < buffer_len) {
-      buffer[pos++] = ' ';
-      buffer[pos] = '\0';
-    }
-  }
-}
 
 void HoymilesDtuInverter::set_serial(uint64_t serial) {
   serial_ = serial;
@@ -107,8 +87,8 @@ void HoymilesDtuInverter::set_channel_yield_today_sensor(uint8_t channel, sensor
   }
 }
 
-bool HoymilesDtuInverter::due(uint32_t now, uint32_t poll_interval) const {
-  return last_poll_ms_ == 0 || now - last_poll_ms_ >= poll_interval;
+bool HoymilesDtuInverter::due(uint32_t now, uint32_t update_interval) const {
+  return last_poll_ms_ == 0 || now - last_poll_ms_ >= update_interval;
 }
 
 void HoymilesDtuInverter::publish_telemetry(const HmTelemetry &telemetry, uint32_t now) {
@@ -144,20 +124,22 @@ void HoymilesDtuInverter::publish_telemetry(const HmTelemetry &telemetry, uint32
   if (yield_total_sensor_ != nullptr) {
     yield_total_sensor_->publish_state(telemetry.yield_total);
   }
+  const uint8_t channel_count = hm_model_channel_count(model_);
   for (uint8_t i = 0; i < HM_MAX_CHANNELS; i++) {
+    const bool in_range = i < channel_count;
     const auto &data = telemetry.channels[i];
     const auto &sensors = channels_[i];
     if (sensors.dc_voltage != nullptr) {
-      sensors.dc_voltage->publish_state(data.dc_voltage);
+      sensors.dc_voltage->publish_state(in_range ? data.dc_voltage : NAN);
     }
     if (sensors.dc_current != nullptr) {
-      sensors.dc_current->publish_state(data.dc_current);
+      sensors.dc_current->publish_state(in_range ? data.dc_current : NAN);
     }
     if (sensors.dc_power != nullptr) {
-      sensors.dc_power->publish_state(data.dc_power);
+      sensors.dc_power->publish_state(in_range ? data.dc_power : NAN);
     }
     if (sensors.yield_today != nullptr) {
-      sensors.yield_today->publish_state(data.yield_today);
+      sensors.yield_today->publish_state(in_range ? data.yield_today : NAN);
     }
   }
   publish_status_();
@@ -216,23 +198,34 @@ void HoymilesDtuComponent::setup() {
   ESP_LOGCONFIG(TAG, "nRF24 radio ready, DTU serial 0x%08X", dtu_serial_);
 }
 
+void HoymilesDtuComponent::update() {
+  if (!radio_ok_ || request_state_ != RequestState::IDLE) {
+    return;
+  }
+  const uint32_t now = millis();
+  for (auto *inverter : inverters_) {
+    if (inverter->due(now, this->get_update_interval())) {
+      start_request_(inverter, now);
+      break;
+    }
+  }
+}
+
 void HoymilesDtuComponent::loop() {
   if (!radio_ok_) {
     return;
   }
   const uint32_t now = millis();
   for (auto *inverter : inverters_) {
-    inverter->mark_offline_if_expired(now, poll_interval_ms_ * 4);
+    inverter->mark_offline_if_expired(now, this->get_update_interval() * 4);
   }
   consume_irq_();
 
   switch (request_state_) {
     case RequestState::IDLE:
-      for (auto *inverter : inverters_) {
-        if (inverter->due(now, poll_interval_ms_)) {
-          start_request_(inverter, now);
-          break;
-        }
+      if (power_limit_pending_) {
+        power_limit_pending_ = false;
+        start_power_limit_request_(now);
       }
       break;
     case RequestState::WAIT_TX_IRQ:
@@ -253,7 +246,7 @@ void HoymilesDtuComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Radio: %s", radio_ok_ ? "nRF24 connected" : "not connected");
   ESP_LOGCONFIG(TAG, "  STATUS=0x%02X CONFIG=0x%02X SETUP_AW=0x%02X RF_SETUP=0x%02X", detected_status_,
                 detected_config_, detected_setup_aw_, detected_rf_setup_);
-  ESP_LOGCONFIG(TAG, "  Poll interval: %ums", poll_interval_ms_);
+  LOG_UPDATE_INTERVAL(this);
   ESP_LOGCONFIG(TAG, "  DTU serial: 0x%08X", dtu_serial_);
   for (auto *inverter : inverters_) {
     ESP_LOGCONFIG(TAG, "  Inverter serial=%012llX model=%s status=%s last_seen=%us error=%s", inverter->get_serial(),
@@ -262,178 +255,18 @@ void HoymilesDtuComponent::dump_config() {
   }
 }
 
-void HoymilesDtuComponent::radio_dump() {
-  if (!radio_ok_) {
-    debug_publish_error_("radio not ready");
-    return;
-  }
-  if (!debug_can_run_()) {
-    return;
-  }
-  debug_publish_register_dump_();
-}
-
-void HoymilesDtuComponent::radio_send_request(const std::string &serial, HmSerialFormat serial_format,
-                                              uint8_t tx_channel, int8_t rx_offset, uint16_t rx_window_ms,
-                                              uint16_t rx_dwell_ms, HmPaLevel pa_level, uint32_t timestamp) {
-  if (!radio_ok_) {
-    debug_publish_error_("radio not ready");
-    return;
-  }
-  if (!debug_can_run_()) {
-    return;
-  }
-  uint64_t radio_id = 0;
-  if (!parse_serial_radio_id_(serial, serial_format, &radio_id)) {
-    debug_publish_error_("invalid serial");
-    return;
-  }
-  uint8_t request[32];
-  uint32_t request_timestamp = timestamp;
-  if (request_timestamp == 0) {
-    const std::time_t epoch = std::time(nullptr);
-    request_timestamp = epoch > 1600000000 ? static_cast<uint32_t>(epoch) : millis() / 1000;
-  }
-  const uint8_t len = hm_build_realtime_request(radio_id, dtu_serial_, request_timestamp, request, sizeof(request));
-  if (len == 0) {
-    debug_publish_error_("request build failed");
-    return;
-  }
-  uint8_t address[5];
-  hm_radio_id_to_address(radio_id, address);
-  const HmPaLevel restore_pa_level = pa_level_;
-  uint8_t status = 0;
-  debug_prepare_();
-  if (debug_send_payload_(request, len, address, tx_channel, pa_level, &status)) {
-    debug_listen_window_(tx_channel, rx_offset, rx_window_ms, rx_dwell_ms);
-  }
-  debug_restore_(restore_pa_level);
-}
-
-void HoymilesDtuComponent::radio_send_raw(const std::string &address_hex, uint8_t tx_channel,
-                                          const std::string &payload_hex, int8_t rx_offset, uint16_t rx_window_ms,
-                                          uint16_t rx_dwell_ms, HmPaLevel pa_level) {
-  if (!radio_ok_) {
-    debug_publish_error_("radio not ready");
-    return;
-  }
-  if (!debug_can_run_()) {
-    return;
-  }
-  uint8_t address[5];
-  uint8_t address_len = 0;
-  if (!parse_hex_(address_hex, address, sizeof(address), &address_len) || address_len != sizeof(address)) {
-    debug_publish_error_("invalid raw address");
-    return;
-  }
-  uint8_t payload[32];
-  uint8_t payload_len = 0;
-  if (!parse_hex_(payload_hex, payload, sizeof(payload), &payload_len) || payload_len == 0) {
-    debug_publish_error_("invalid raw payload");
-    return;
-  }
-  const HmPaLevel restore_pa_level = pa_level_;
-  uint8_t status = 0;
-  debug_prepare_();
-  if (debug_send_payload_(payload, payload_len, address, tx_channel, pa_level, &status)) {
-    debug_listen_window_(tx_channel, rx_offset, rx_window_ms, rx_dwell_ms);
-  }
-  debug_restore_(restore_pa_level);
-}
-
-void HoymilesDtuComponent::radio_listen(uint8_t channel, uint16_t window_ms, uint16_t dwell_ms) {
-  if (!radio_ok_) {
-    debug_publish_error_("radio not ready");
-    return;
-  }
-  if (!debug_can_run_()) {
-    return;
-  }
-  const HmPaLevel restore_pa_level = pa_level_;
-  debug_prepare_();
-  debug_listen_window_(channel, 0, window_ms, dwell_ms);
-  debug_restore_(restore_pa_level);
-}
-
 void HoymilesDtuComponent::radio_set_power_limit(uint16_t percent, bool persistent) {
   if (!radio_ok_) {
-    debug_publish_error_("radio not ready");
-    return;
-  }
-  if (!debug_can_run_()) {
+    publish_radio_error_("radio not ready");
     return;
   }
   if (inverters_.empty()) {
-    debug_publish_error_("no inverter configured");
+    publish_radio_error_("no inverter configured");
     return;
   }
-  HoymilesDtuInverter *inverter = inverters_.front();
-  uint8_t packet[32];
-  const uint8_t len =
-      hm_build_power_limit_request(inverter->get_radio_id(), dtu_serial_, percent, persistent, packet, sizeof(packet));
-  if (len == 0) {
-    debug_publish_error_("power-limit build failed");
-    return;
-  }
-
-  const HmPaLevel restore_pa_level = pa_level_;
-  debug_prepare_();
-
-  uint8_t address[5];
-  hm_radio_id_to_address(inverter->get_radio_id(), address);
-
-  // Burst-acquire: send the control packet on rotating channels until the inverter ACKs.
-  bool acked = false;
-  uint8_t tx_channel = HM_RF_CHANNELS[0];
-  for (uint8_t attempt = 0; attempt < MAX_TX_ATTEMPTS && !acked; attempt++) {
-    tx_channel = HM_RF_CHANNELS[attempt % 5];
-    uint8_t status = 0;
-    debug_send_payload_(packet, len, address, tx_channel, pa_level_, &status);
-    acked = (status & NRF_STATUS_TX_DS) != 0;
-  }
-  if (!acked) {
-    ESP_LOGW(TAG, "Power limit %u%%: no ACK after %u attempts", percent, MAX_TX_ATTEMPTS);
-    debug_publish_error_("power-limit no ack");
-    debug_restore_(restore_pa_level);
-    return;
-  }
-
-  // The single dev-control confirmation frame (0xD1) lands on (txCh+3) like the realtime reply, so
-  // park there (don't hop) — one frame gives only one chance to be on the right channel.
-  uint8_t rx_index = 0;
-  for (uint8_t i = 0; i < 5; i++) {
-    if (HM_RF_CHANNELS[i] == tx_channel) {
-      rx_index = (i + 3) % 5;
-      break;
-    }
-  }
-  start_listening_(HM_RF_CHANNELS[rx_index]);
-  const uint32_t started = millis();
-  bool confirmed = false;
-  bool got_response = false;
-  while (millis() - started < 500 && !confirmed) {
-    while ((read_register_(NRF_REG_FIFO_STATUS) & NRF_FIFO_RX_EMPTY) == 0) {
-      uint8_t pkt[32];
-      uint8_t pkt_len = 0;
-      if (!rx_payload_(pkt, &pkt_len)) {
-        break;
-      }
-      char hex[96];
-      format_hex_(pkt, pkt_len, hex, sizeof(hex));
-      ESP_LOGD(TAG, "Power-limit RX ch=%u len=%u data=%s", read_register_(NRF_REG_RF_CH), pkt_len, hex);
-      // DevControl response: cmd byte at [10/11] both 0 = accepted (Ahoy parseDevCtrl).
-      if (pkt_len >= 14 && pkt[0] == (HM_TX_REQ_DEVCONTROL | HM_ALL_FRAMES) && pkt[12] == HM_DEV_CTRL_ACTIVE_POWER) {
-        got_response = true;
-        confirmed = (pkt[10] == 0x00 && pkt[11] == 0x00 && pkt[13] == 0x00);
-      }
-    }
-    delay(1);
-  }
-  stop_listening_();
-  debug_restore_(restore_pa_level);
-
-  ESP_LOGI(TAG, "Power limit %u%% (%s): TX_DS on ch=%u -> %s", percent, persistent ? "persistent" : "non-persistent",
-           tx_channel, confirmed ? "ACCEPTED by inverter" : (got_response ? "REJECTED" : "no confirmation frame"));
+  power_limit_percent_ = percent;
+  power_limit_persistent_ = persistent;
+  power_limit_pending_ = true;
 }
 
 bool HoymilesDtuComponent::setup_radio_() {
@@ -495,6 +328,7 @@ void IRAM_ATTR HoymilesDtuComponent::irq_handler_(HoymilesDtuComponent *arg) {
 void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_t now) {
   active_inverter_ = inverter;
   active_inverter_->mark_poll_started(now);
+  exchange_kind_ = ExchangeKind::TELEMETRY;
   frame_count_ = 0;
   // Unknown until the inverter sends the fragment with the 0x80 "last" bit; until then never treat
   // the record as complete. (read_available_packets_ lowers this to the real count.)
@@ -515,12 +349,59 @@ void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_
   write_register_(NRF_REG_TX_ADDR, inverter_address, sizeof(inverter_address));
   write_register_(NRF_REG_RX_ADDR_P0, inverter_address, sizeof(inverter_address));
 
+  uint32_t request_timestamp = now / 1000;
+  const std::time_t epoch = std::time(nullptr);
+  if (epoch > 1600000000) {
+    request_timestamp = static_cast<uint32_t>(epoch);
+  }
+  request_len_ =
+      hm_build_realtime_request(inverter->get_radio_id(), dtu_serial_, request_timestamp, request_, sizeof(request_));
+  if (request_len_ == 0) {
+    finish_request_(false, "request build failed", now);
+    return;
+  }
+
+  transmit_request_(now);
+}
+
+void HoymilesDtuComponent::start_power_limit_request_(uint32_t now) {
+  HoymilesDtuInverter *inverter = inverters_.front();
+  active_inverter_ = inverter;
+  exchange_kind_ = ExchangeKind::DEV_CONTROL;
+  frame_count_ = 0;
+  expected_frames_ = HM_MAX_FRAME_COUNT;
+  record_attempt_ = 0;
+  rx_packet_count_ = 0;
+  invalid_frame_count_ = 0;
+  duplicate_frame_count_ = 0;
+  tx_status_ = 0;
+  tx_result_ = "no ack";
+  irq_pending_ = false;
+  tx_attempt_ = 0;
+  dev_ctrl_got_response_ = false;
+  dev_ctrl_confirmed_ = false;
+  begin_exchange_();
+
+  uint8_t inverter_address[5];
+  hm_radio_id_to_address(inverter->get_radio_id(), inverter_address);
+  write_register_(NRF_REG_TX_ADDR, inverter_address, sizeof(inverter_address));
+  write_register_(NRF_REG_RX_ADDR_P0, inverter_address, sizeof(inverter_address));
+
+  request_len_ = hm_build_power_limit_request(inverter->get_radio_id(), dtu_serial_, power_limit_percent_,
+                                              power_limit_persistent_, request_, sizeof(request_));
+  if (request_len_ == 0) {
+    finish_request_(false, "power-limit build failed", now);
+    return;
+  }
+
   transmit_request_(now);
 }
 
 // Build and transmit one acquisition request. Called for the first attempt and for each
 // burst retransmit. Mirrors Ahoy's acquisition: advance the TX channel each attempt (cold-start
 // equivalent of its per-channel quality heuristic), transmit with auto-ack, and wait for the IRQ.
+// The request payload is built once per exchange (start_request_/start_power_limit_request_) and
+// reused for every retransmit in the burst, same as Ahoy keeps one payload for a whole burst.
 void HoymilesDtuComponent::transmit_request_(uint32_t now) {
   if (active_inverter_ == nullptr) {
     finish_request_(false, "no inverter", now);
@@ -531,36 +412,22 @@ void HoymilesDtuComponent::transmit_request_(uint32_t now) {
   tx_channel_index_ = (tx_channel_index_ + 1) % 5;
   rx_channel_index_ = (tx_channel_index_ + 3) % 5;
 
-  uint8_t request[32];
-  uint32_t request_timestamp = now / 1000;
-  const std::time_t epoch = std::time(nullptr);
-  if (epoch > 1600000000) {
-    request_timestamp = static_cast<uint32_t>(epoch);
-  }
-  const uint8_t len = hm_build_realtime_request(active_inverter_->get_radio_id(), dtu_serial_, request_timestamp,
-                                                request, sizeof(request));
-  if (len == 0) {
-    finish_request_(false, "request build failed", now);
-    return;
-  }
-
   request_started_ms_ = now;
   stop_listening_();
   set_channel_(HM_RF_CHANNELS[tx_channel_index_]);
 
+#ifdef ESPHOME_LOG_HAS_DEBUG
   if (tx_attempt_ == 0) {
     uint8_t inverter_address[5];
     hm_radio_id_to_address(active_inverter_->get_radio_id(), inverter_address);
-    char request_hex[96];
-    char address_hex[24];
-    format_hex_(request, len, request_hex, sizeof(request_hex));
-    format_hex_(inverter_address, sizeof(inverter_address), address_hex, sizeof(address_hex));
     ESP_LOGD(TAG, "TX request inverter=%012llX ch=%u addr=%s len=%u data=%s", active_inverter_->get_serial(),
-             HM_RF_CHANNELS[tx_channel_index_], address_hex, len, request_hex);
+             HM_RF_CHANNELS[tx_channel_index_], format_hex_pretty(inverter_address, sizeof(inverter_address)).c_str(),
+             request_len_, format_hex_pretty(request_, request_len_).c_str());
   }
+#endif
 
   tx_result_ = "no ack";
-  if (tx_payload_(request, len)) {
+  if (tx_payload_(request_, request_len_)) {
     request_state_ = RequestState::WAIT_TX_IRQ;
   } else {
     begin_rx_window_(now);  // can't wait for a TX IRQ; fall back to listening
@@ -600,6 +467,20 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
 
 void HoymilesDtuComponent::poll_rx_(uint32_t now) {
   read_available_packets_();
+
+  if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
+    // Single confirmation frame (0xD1): no re-request, no channel hopping — just wait out the
+    // window on the parked channel (begin_rx_window_ already put us on tx_channel+3).
+    if (dev_ctrl_confirmed_) {
+      finish_request_(true, "", now);
+      return;
+    }
+    if (now - rx_started_ms_ >= RX_TIMEOUT_MS) {
+      finish_request_(false, dev_ctrl_got_response_ ? "power-limit rejected" : "no confirmation", now);
+    }
+    return;
+  }
+
   if (process_response_(now)) {
     finish_request_(true, "", now);
     return;
@@ -639,7 +520,11 @@ void HoymilesDtuComponent::poll_rx_(uint32_t now) {
 
 void HoymilesDtuComponent::finish_request_(bool success, const char *error, uint32_t now) {
   log_exchange_summary_(success, error, now);
-  if (!success && active_inverter_ != nullptr) {
+  if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
+    if (!success) {
+      publish_radio_error_(error);
+    }
+  } else if (!success && active_inverter_ != nullptr) {
     active_inverter_->set_last_error(error);
   }
   stop_listening_();
@@ -649,8 +534,16 @@ void HoymilesDtuComponent::finish_request_(bool success, const char *error, uint
 }
 
 void HoymilesDtuComponent::log_exchange_summary_(bool success, const char *error, uint32_t now) {
-  const uint32_t duration_ms = now - request_started_ms_;
   const uint8_t tx_channel = HM_RF_CHANNELS[tx_channel_index_];
+  if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
+    const char *result =
+        success ? "ACCEPTED by inverter" : (dev_ctrl_got_response_ ? "REJECTED" : "no confirmation frame");
+    ESP_LOGI(TAG, "Power limit %u%% (%s): TX_DS on ch=%u -> %s", power_limit_percent_,
+             power_limit_persistent_ ? "persistent" : "non-persistent", tx_channel, result);
+    return;
+  }
+
+  const uint32_t duration_ms = now - request_started_ms_;
   const uint8_t rx_channel = HM_RF_CHANNELS[rx_channel_index_];
   const char *result = success ? "complete" : error;
   const uint64_t serial = active_inverter_ == nullptr ? 0 : active_inverter_->get_serial();
@@ -681,14 +574,28 @@ void HoymilesDtuComponent::read_available_packets_() {
       break;
     }
     rx_packet_count_++;
-    char packet_hex[96];
-    format_hex_(packet, len, packet_hex, sizeof(packet_hex));
-    ESP_LOGD(TAG, "RX payload ch=%u len=%u data=%s", read_register_(NRF_REG_RF_CH), len, packet_hex);
+#ifdef ESPHOME_LOG_HAS_DEBUG
+    const std::string packet_hex = format_hex_pretty(packet, len);
+    ESP_LOGD(TAG, "RX payload ch=%u len=%u data=%s", read_register_(NRF_REG_RF_CH), len, packet_hex.c_str());
     if (last_rx_payload_text_sensor_ != nullptr) {
       last_rx_payload_text_sensor_->publish_state(packet_hex);
     }
+#else
+    if (last_rx_payload_text_sensor_ != nullptr) {
+      last_rx_payload_text_sensor_->publish_state(format_hex_pretty(packet, len));
+    }
+#endif
     if (active_inverter_ == nullptr) {
       invalid_frame_count_++;
+      continue;
+    }
+    if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
+      // DevControl confirmation (0xD1) doesn't fit the 0x95 realtime-frame shape hm_parse_frame
+      // expects; check the raw layout directly (Ahoy parseDevCtrl: [10]==[11]==0 accepted).
+      if (len >= 14 && packet[0] == (HM_TX_REQ_DEVCONTROL | HM_ALL_FRAMES) && packet[12] == HM_DEV_CTRL_ACTIVE_POWER) {
+        dev_ctrl_got_response_ = true;
+        dev_ctrl_confirmed_ = (packet[10] == 0x00 && packet[11] == 0x00 && packet[13] == 0x00);
+      }
       continue;
     }
     if (frame_count_ >= HM_MAX_FRAME_COUNT) {
@@ -698,7 +605,7 @@ void HoymilesDtuComponent::read_available_packets_() {
     HmFrame frame;
     if (!hm_parse_frame(packet, len, active_inverter_->get_radio_id(), &frame)) {
       invalid_frame_count_++;
-      ESP_LOGW(TAG, "Ignored invalid HM frame len=%u data=%s", len, packet_hex);
+      ESP_LOGW(TAG, "Ignored invalid HM frame len=%u data=%s", len, format_hex_pretty(packet, len).c_str());
       continue;
     }
     bool replaced = false;
@@ -723,147 +630,8 @@ void HoymilesDtuComponent::read_available_packets_() {
   clear_status_(NRF_STATUS_RX_DR);
 }
 
-bool HoymilesDtuComponent::debug_can_run_() {
-  if (request_state_ == RequestState::IDLE) {
-    return true;
-  }
-  debug_publish_error_("radio busy");
-  return false;
-}
-
-void HoymilesDtuComponent::debug_prepare_() {
-  stop_listening_();
-  command_(NRF_FLUSH_RX);
-  command_(NRF_FLUSH_TX);
-  clear_status_(NRF_STATUS_RX_DR | NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
-  frame_count_ = 0;
-  active_inverter_ = nullptr;
-  request_state_ = RequestState::IDLE;
-}
-
-void HoymilesDtuComponent::debug_restore_(HmPaLevel restore_pa_level) {
-  pa_level_ = restore_pa_level;
-  configure_radio_();
-}
-
-bool HoymilesDtuComponent::debug_send_payload_(const uint8_t *payload, uint8_t len, const uint8_t *address,
-                                               uint8_t tx_channel, HmPaLevel pa_level, uint8_t *final_status) {
-  pa_level_ = pa_level;
-  configure_radio_();
-  stop_listening_();
-  set_channel_(tx_channel);
-  write_register_(NRF_REG_TX_ADDR, address, 5);
-  write_register_(NRF_REG_RX_ADDR_P0, address, 5);
-
-  char payload_hex[96];
-  char address_hex[24];
-  format_hex_(payload, len, payload_hex, sizeof(payload_hex));
-  format_hex_(address, 5, address_hex, sizeof(address_hex));
-  ESP_LOGI(TAG, "Debug TX ch=%u addr=%s len=%u data=%s", tx_channel, address_hex, len, payload_hex);
-  command_(NRF_FLUSH_TX);
-  clear_status_(NRF_STATUS_RX_DR | NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
-  set_rx_mode_(false);
-  command_(NRF_W_TX_PAYLOAD, payload, nullptr, len);
-  set_ce_(true);
-  uint8_t status = read_register_(NRF_REG_STATUS);
-  const uint32_t started = millis();
-  while (millis() - started < TX_TIMEOUT_MS) {
-    status = read_register_(NRF_REG_STATUS);
-    if ((status & (NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT)) != 0) {
-      break;
-    }
-    delayMicroseconds(250);
-  }
-  set_ce_(false);
-  status = read_register_(NRF_REG_STATUS);
-  if (final_status != nullptr) {
-    *final_status = status;
-  }
-  debug_publish_last_tx_(tx_channel, address, status);
-  if ((status & NRF_STATUS_TX_DS) != 0) {
-    ESP_LOGI(TAG, "Debug TX_DS status=0x%02X", status);
-    clear_status_(NRF_STATUS_TX_DS);
-    return true;
-  }
-  if ((status & NRF_STATUS_MAX_RT) != 0) {
-    ESP_LOGW(TAG, "Debug MAX_RT status=0x%02X", status);
-    clear_status_(NRF_STATUS_MAX_RT);
-    command_(NRF_FLUSH_TX);
-    return true;
-  }
-  ESP_LOGW(TAG, "Debug TX timeout status=0x%02X", status);
-  debug_publish_error_("debug tx timeout");
-  return true;
-}
-
-void HoymilesDtuComponent::debug_listen_window_(uint8_t start_channel, int8_t rx_offset, uint16_t window_ms,
-                                                uint16_t dwell_ms) {
-  window_ms = window_ms == 0 ? RX_TIMEOUT_MS : window_ms;
-  if (window_ms > DEBUG_MAX_WINDOW_MS) {
-    window_ms = DEBUG_MAX_WINDOW_MS;
-  }
-  dwell_ms = dwell_ms == 0 ? RX_CHANNEL_DWELL_MS : dwell_ms;
-  uint8_t channel = channel_with_offset_(start_channel, rx_offset);
-  ESP_LOGI(TAG, "Debug RX listen ch=%u window=%ums dwell=%ums", channel, window_ms, dwell_ms);
-  start_listening_(channel);
-  const uint32_t started = millis();
-  uint32_t last_switch = started;
-  while (millis() - started < window_ms) {
-    read_available_packets_();
-    if (dwell_ms > 0 && millis() - last_switch >= dwell_ms) {
-      channel = channel_with_offset_(channel, 1);
-      set_channel_(channel);
-      ESP_LOGV(TAG, "Debug RX hop ch=%u", channel);
-      last_switch = millis();
-    }
-    delay(1);
-  }
-  read_available_packets_();
-  stop_listening_();
-}
-
-void HoymilesDtuComponent::debug_publish_last_tx_(uint8_t channel, const uint8_t *address, uint8_t status) {
-  char address_hex[24];
-  char buffer[64];
-  format_hex_(address, 5, address_hex, sizeof(address_hex));
-  snprintf(buffer, sizeof(buffer), "ch=%u addr=%s status=0x%02X", channel, address_hex, status);
-  ESP_LOGI(TAG, "Debug last TX %s", buffer);
-  if (last_tx_text_sensor_ != nullptr) {
-    last_tx_text_sensor_->publish_state(buffer);
-  }
-}
-
-void HoymilesDtuComponent::debug_publish_register_dump_() {
-  uint8_t rx_p0[5];
-  uint8_t rx_p1[5];
-  uint8_t tx_addr[5];
-  read_register_(NRF_REG_RX_ADDR_P0, rx_p0, sizeof(rx_p0));
-  read_register_(NRF_REG_RX_ADDR_P1, rx_p1, sizeof(rx_p1));
-  read_register_(NRF_REG_TX_ADDR, tx_addr, sizeof(tx_addr));
-  char rx_p0_hex[24];
-  char rx_p1_hex[24];
-  char tx_hex[24];
-  format_hex_(rx_p0, sizeof(rx_p0), rx_p0_hex, sizeof(rx_p0_hex));
-  format_hex_(rx_p1, sizeof(rx_p1), rx_p1_hex, sizeof(rx_p1_hex));
-  format_hex_(tx_addr, sizeof(tx_addr), tx_hex, sizeof(tx_hex));
-  char dump[256];
-  snprintf(dump, sizeof(dump),
-           "STATUS=0x%02X CONFIG=0x%02X EN_AA=0x%02X EN_RXADDR=0x%02X SETUP_AW=0x%02X SETUP_RETR=0x%02X "
-           "RF_CH=%u RF_SETUP=0x%02X OBSERVE_TX=0x%02X FIFO=0x%02X DYNPD=0x%02X FEATURE=0x%02X "
-           "RX_P0=%s RX_P1=%s TX=%s",
-           read_register_(NRF_REG_STATUS), read_register_(NRF_REG_CONFIG), read_register_(NRF_REG_EN_AA),
-           read_register_(NRF_REG_EN_RXADDR), read_register_(NRF_REG_SETUP_AW), read_register_(NRF_REG_SETUP_RETR),
-           read_register_(NRF_REG_RF_CH), read_register_(NRF_REG_RF_SETUP), read_register_(NRF_REG_OBSERVE_TX),
-           read_register_(NRF_REG_FIFO_STATUS), read_register_(NRF_REG_DYNPD), read_register_(NRF_REG_FEATURE),
-           rx_p0_hex, rx_p1_hex, tx_hex);
-  ESP_LOGI(TAG, "Debug nRF dump %s", dump);
-  if (last_register_dump_text_sensor_ != nullptr) {
-    last_register_dump_text_sensor_->publish_state(dump);
-  }
-}
-
-void HoymilesDtuComponent::debug_publish_error_(const char *error) {
-  ESP_LOGW(TAG, "Debug radio error: %s", error);
+void HoymilesDtuComponent::publish_radio_error_(const char *error) {
+  ESP_LOGW(TAG, "Radio error: %s", error);
   if (last_radio_error_text_sensor_ != nullptr) {
     last_radio_error_text_sensor_->publish_state(error);
   }
@@ -1009,94 +777,6 @@ uint8_t HoymilesDtuComponent::command_(uint8_t command, const uint8_t *tx, uint8
 
 bool HoymilesDtuComponent::plausible_status_(uint8_t status) {
   return status != 0x00 && status != 0xFF && (status & 0x80) == 0;
-}
-
-bool HoymilesDtuComponent::parse_hex_(const std::string &hex, uint8_t *buffer, uint8_t max_len, uint8_t *out_len) {
-  uint8_t len = 0;
-  int8_t high_nibble = -1;
-  for (char c : hex) {
-    if (c == ' ' || c == ':' || c == '-' || c == ',' || c == '\t' || c == '\n' || c == '\r') {
-      continue;
-    }
-    if (c == 'x' || c == 'X') {
-      if (high_nibble == 0) {
-        high_nibble = -1;
-        continue;
-      }
-      return false;
-    }
-    int8_t value = -1;
-    if (c >= '0' && c <= '9') {
-      value = c - '0';
-    } else if (c >= 'a' && c <= 'f') {
-      value = c - 'a' + 10;
-    } else if (c >= 'A' && c <= 'F') {
-      value = c - 'A' + 10;
-    } else {
-      return false;
-    }
-    if (high_nibble < 0) {
-      high_nibble = value;
-      continue;
-    }
-    if (len >= max_len) {
-      return false;
-    }
-    buffer[len++] = (high_nibble << 4) | value;
-    high_nibble = -1;
-  }
-  if (high_nibble >= 0) {
-    return false;
-  }
-  *out_len = len;
-  return true;
-}
-
-bool HoymilesDtuComponent::parse_serial_radio_id_(const std::string &serial, HmSerialFormat format,
-                                                  uint64_t *radio_id) {
-  if (serial.length() != 12) {
-    return false;
-  }
-  uint64_t value = 0;
-  if (format == SERIAL_DECIMAL) {
-    for (char c : serial) {
-      if (c < '0' || c > '9') {
-        return false;
-      }
-      value = value * 10 + (c - '0');
-    }
-  } else if (format == SERIAL_BCD || format == SERIAL_RAW) {
-    for (char c : serial) {
-      if (c < '0' || c > '9') {
-        return false;
-      }
-      value = (value << 4) | (c - '0');
-    }
-  } else {
-    return false;
-  }
-  *radio_id = hm_radio_id_from_serial(value);
-  return true;
-}
-
-uint8_t HoymilesDtuComponent::channel_with_offset_(uint8_t tx_channel, int8_t rx_offset) {
-  for (uint8_t i = 0; i < 5; i++) {
-    if (HM_RF_CHANNELS[i] == tx_channel) {
-      int8_t index = static_cast<int8_t>(i) + rx_offset;
-      while (index < 0) {
-        index += 5;
-      }
-      return HM_RF_CHANNELS[index % 5];
-    }
-  }
-  int16_t channel = static_cast<int16_t>(tx_channel) + rx_offset;
-  if (channel < 0) {
-    return 0;
-  }
-  if (channel > 125) {
-    return 125;
-  }
-  return channel;
 }
 
 }  // namespace hoymiles_dtu

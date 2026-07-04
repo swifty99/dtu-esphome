@@ -36,7 +36,7 @@ hoymiles_dtu:
   cs_pin: ${cs_pin}
   ce_pin: ${ce_pin}
   irq_pin: ${irq_pin}
-  poll_interval: 15s
+  update_interval: 15s
   pa_level: low
   inverters:
     - id: hm4

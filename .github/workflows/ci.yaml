@@ -22,14 +22,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest
+      - run: pip install pytest esphome
       - run: pytest tests/unit
 
   compile:
     runs-on: ubuntu-latest
     container:
-      # yamllint disable-line rule:line-length
-      image: ghcr.io/esphome/esphome:2026.5.0-dev20260503@sha256:fae8aa9f1aa8c1dc54774c17e28487055ac2cbe14d13dd38e6a1f480e9b98411
+      image: ghcr.io/esphome/esphome:2026.6.3
     strategy:
       fail-fast: false
       matrix:

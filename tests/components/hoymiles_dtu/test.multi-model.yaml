@@ -32,7 +32,7 @@ hoymiles_dtu:
   cs_pin: GPIO5
   ce_pin: GPIO4
   irq_pin: GPIO16
-  poll_interval: 15s
+  update_interval: 15s
   inverters:
     - id: hm1
       serial: "112100000000"
