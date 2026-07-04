@@ -1,14 +1,14 @@
 # ESPHome Hoymiles DTU
 
 External ESPHome component that talks directly to Hoymiles HM-series
-microinverters over an nRF24L01+ radio — no Ahoy, no vendor DTU, no cloud.
-It reads live AC/DC telemetry and can send an active-power-limit command.
+microinverters over an nRF24L01+ radio. It reads live AC/DC telemetry and can send an active-power-limit command.
 
 ## Status
 
 Alpha-stage, HM-only. Standalone telemetry (link acquisition, fragment
 reassembly, per-model decode) and the active-power-limit command are verified
-on hardware against a live HM-1200. On/off, restart, and multi-inverter
+on hardware against a live HM-1200. 
+On/off, restart, and multi-inverter
 scheduling beyond "one at a time" are not implemented yet.
 
 ### Supported models
