@@ -32,7 +32,7 @@ hoymiles_dtu:
   cs_pin: GPIO9
   ce_pin: GPIO12
   irq_pin: GPIO7
-  poll_interval: 15s
+  update_interval: 15s
   pa_level: low
   inverters:
     - id: hm4
@@ -103,49 +103,7 @@ text_sensor:
       name: "HM4 Last Seen"
   - platform: hoymiles_dtu
     dtu_id: dtu
-    last_tx:
-      name: "DTU Last TX"
     last_rx_payload:
       name: "DTU Last RX Payload"
-    last_register_dump:
-      name: "DTU Last Register Dump"
     last_radio_error:
       name: "DTU Last Radio Error"
-
-button:
-  - platform: template
-    name: "DTU Radio Dump"
-    on_press:
-      - hoymiles_dtu.radio_dump: dtu
-  - platform: template
-    name: "DTU Radio Request BCD"
-    on_press:
-      - hoymiles_dtu.radio_send_request:
-          id: dtu
-          serial: "116182806989"
-          serial_format: bcd
-          tx_channel: 3
-          rx_offset: 3
-          rx_window_ms: 520
-          rx_dwell_ms: 8
-          pa_level: low
-  - platform: template
-    name: "DTU Radio Raw"
-    on_press:
-      - hoymiles_dtu.radio_send_raw:
-          id: dtu
-          address: "01 82 80 69 89"
-          tx_channel: 3
-          payload: "15 89 69 80 82 60 54 91 83 80 0B 00"
-          rx_offset: 3
-          rx_window_ms: 120
-          rx_dwell_ms: 8
-          pa_level: low
-  - platform: template
-    name: "DTU Radio Listen"
-    on_press:
-      - hoymiles_dtu.radio_listen:
-          id: dtu
-          channel: 3
-          window_ms: 120
-          dwell_ms: 8

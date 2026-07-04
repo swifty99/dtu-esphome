@@ -1,18 +1,5 @@
 from __future__ import annotations
 
-SERIAL_FORMAT_DECIMAL = "decimal"
-SERIAL_FORMAT_BCD = "bcd"
-SERIAL_FORMAT_RAW = "raw"
-
-
-def parse_serial(value: str | int) -> int:
-    text = str(value).strip()
-    if not text.isdigit():
-        raise ValueError("serial must contain decimal digits only")
-    if len(text) != 12:
-        raise ValueError("serial must be exactly 12 decimal digits")
-    return int(text, 10)
-
 
 def parse_serial_bcd(value: str | int) -> int:
     text = str(value).strip()
@@ -23,30 +10,12 @@ def parse_serial_bcd(value: str | int) -> int:
     return int(text, 16)
 
 
-def radio_id_from_serial(value: str | int) -> int:
-    serial = parse_serial(value)
-    return radio_id_from_low32(serial)
-
-
 def radio_id_from_low32(serial: int) -> int:
     b0 = serial & 0xFF
     b1 = (serial >> 8) & 0xFF
     b2 = (serial >> 16) & 0xFF
     b3 = (serial >> 24) & 0xFF
     return (b0 << 32) | (b1 << 24) | (b2 << 16) | (b3 << 8) | 0x01
-
-
-def radio_id_from_serial_format(
-    value: str | int, serial_format: str = SERIAL_FORMAT_DECIMAL
-) -> int:
-    if serial_format == SERIAL_FORMAT_DECIMAL:
-        return radio_id_from_serial(value)
-    if serial_format in (SERIAL_FORMAT_BCD, SERIAL_FORMAT_RAW):
-        return radio_id_from_low32(parse_serial_bcd(value))
-    raise ValueError(
-        f"serial_format must be one of: {SERIAL_FORMAT_DECIMAL}, "
-        f"{SERIAL_FORMAT_BCD}, {SERIAL_FORMAT_RAW}"
-    )
 
 
 def crc8(data: bytes | bytearray) -> int:

@@ -1,7 +1,5 @@
 # HM/nRF24 Reference Notes
 
-Last checked: 2026-06-28.
-
 Project scope:
 
 - HM-series inverters only.
@@ -31,47 +29,40 @@ Protocol facts used by the first HM 4-channel milestone:
 - HM 4-channel realtime payload is expected in seven fragments.
 - Frame CRC is CRC8 polynomial `0x01`, init `0x00`.
 - Payload control CRC is CRC16/Modbus polynomial `0xA001`, init `0xFFFF`.
+- RX pipe/address setup: Ahoy `NrfRadio.h::setup()` opens the reading pipe on
+  the DTU's own radio id; `sendPacket()` opens the writing pipe on the target
+  inverter's radio id (RF24 pipe 0 handles the TX ACK).
+- On TX ACK, Ahoy sets HM `rxOffset = 3`, starts RX on `(txCh+3) % 5`. For the
+  first `DURATION_TXFRAME = 85ms` it pendulates RX between `txCh+3` and
+  `txCh+2` (channel dwell `DURATION_LISTEN_MIN = 5ms`), then falls back to a
+  reverse sweep through all five channels. These map to this component's
+  `RX_INITIAL_PENDULUM_MS` / `RX_CHANNEL_DWELL_MS` constants.
+- Ahoy's retransmit setup is `setRetries(3, 15)`.
 
-## ESPHome action API check, 2026-06-28
+## ESPHome API notes
 
-Verified against local ESPHome `2026.6.2` and upstream ESPHome source:
-
-- `automation.register_action(...)` requires an explicit `synchronous=` keyword.
-- Action classes that complete all work inside `play()` should register with
-  `synchronous=True`.
-- Trivially-copyable `TEMPLATABLE_VALUE(...)` fields need Python codegen to pass
-  values through `cg.templatable(value, args, type)` before calling setters.
-
-## ESPHome radio-loop API check, 2026-06-28
-
-Verified against local generated ESPHome `2026.6.2` headers:
-
-- `Component::enable_loop_soon_any_context()` is declared in
-  `esphome/core/component.h`, defined with `IRAM_ATTR`, sets the component's
-  pending loop-enable flag, and calls `wake_loop_any_context()`.
-- `HighFrequencyLoopRequester` is declared in `esphome/core/helpers.h`; use
+- `automation.register_action(...)` requires an explicit `synchronous=`
+  keyword; action classes that complete all work inside `play()` (including
+  ones that just queue state for a state machine to pick up later) should
+  register with `synchronous=True`.
+- Trivially-copyable `TEMPLATABLE_VALUE(...)` fields need Python codegen to
+  pass values through `cg.templatable(value, args, type)` before calling
+  setters.
+- `Component::enable_loop_soon_any_context()` (declared in
+  `esphome/core/component.h`) is `IRAM_ATTR`-safe; it sets the component's
+  pending loop-enable flag and calls `wake_loop_any_context()`.
+- `HighFrequencyLoopRequester` (declared in `esphome/core/helpers.h`) —
   `start()`/`stop()` from normal loop context only while a radio exchange is
   active.
-- `GPIOPin` has no interrupt API. Interrupt attachment requires
+- `GPIOPin` has no interrupt API; interrupt attachment requires
   `InternalGPIOPin::attach_interrupt(func, arg, gpio::INTERRUPT_FALLING_EDGE)`.
 - ISR handlers must not perform SPI, logging, parsing, publishing, or
   `HighFrequencyLoopRequester` state changes. The nRF IRQ handler should only
   set an ISR-safe flag and call `enable_loop_soon_any_context()`.
-
-## Ahoy nRF24 RX behavior check, 2026-06-28
-
-Verified against upstream Ahoy `main`:
-
-- `src/hm/NrfRadio.h::setup()` calls `openReadingPipe(1, mDtuRadioId)`.
-- `src/hm/NrfRadio.h::sendPacket()` calls `openWritingPipe(iv->radioId)`;
-  RF24 uses pipe 0 for TX ACK handling.
-- On TX IRQ, Ahoy sets HM `rxOffset = 3`, starts RX on `(txCh+3) % 5`, and
-  calls `startListening()`.
-- While waiting, Ahoy uses `DURATION_LISTEN_MIN = 5ms`. For the first
-  `DURATION_TXFRAME = 85ms`, HM RX pendulates between `txCh+3` and `txCh+2`;
-  after that it falls back to a reverse sweep through all five channels.
-- Ahoy setup uses 250 kbps RF, CRC16, 5-byte addresses, dynamic payloads, and
-  default auto-ack enabled. Retries are `setRetries(3, 15)`.
+- `cv.polling_component_schema(default)` extends `COMPONENT_SCHEMA` and adds
+  `update_interval:`; `cg.register_component()` calls `set_update_interval()`
+  automatically when `CONF_UPDATE_INTERVAL` is present in config, so
+  `PollingComponent` subclasses don't need to wire it by hand.
 
 ## HM model families and realtime payload layout, 2026-07-01
 

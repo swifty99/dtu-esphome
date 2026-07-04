@@ -11,46 +11,9 @@ def load_protocol_module():
     return module
 
 
-def test_serial_validation_accepts_real_hoymiles_width():
-    protocol = load_protocol_module()
-    assert protocol.parse_serial("114180000000") == 114180000000
-
-
-def test_serial_validation_rejects_bad_values():
-    protocol = load_protocol_module()
-    for value in ["11418000000", "1141800000000", "11418A000000"]:
-        try:
-            protocol.parse_serial(value)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"{value!r} should be rejected")
-
-
-def test_radio_id_uses_low_serial_bytes_reversed_with_pipe_suffix():
-    protocol = load_protocol_module()
-    serial = 114180000000
-    low32 = serial & 0xFFFFFFFF
-    expected = (
-        ((low32 & 0xFF) << 32)
-        | (((low32 >> 8) & 0xFF) << 24)
-        | (((low32 >> 16) & 0xFF) << 16)
-        | (((low32 >> 24) & 0xFF) << 8)
-        | 0x01
-    )
-    assert protocol.radio_id_from_serial(serial) == expected
-
-
-def test_bcd_serial_format_uses_packed_hoymiles_digits():
-    protocol = load_protocol_module()
-    radio_id = protocol.radio_id_from_serial_format("116182806989", "bcd")
-    address = bytes((radio_id >> (8 * i)) & 0xFF for i in range(5))
-    assert address == bytes.fromhex("01 82 80 69 89")
-
-
 def test_inverter_config_serial_is_bcd_packed():
-    # The inverter `serial:` config (validate_serial in __init__.py) now interprets
-    # the printed digits as packed BCD, exactly like Ahoy. Guard against a regression
+    # The inverter `serial:` config (validate_serial in __init__.py) interprets the
+    # printed digits as packed BCD, exactly like Ahoy. Guard against a regression
     # back to decimal, which would transmit to the wrong nRF address (01 0D 08 F1 CD).
     protocol = load_protocol_module()
     packed = protocol.parse_serial_bcd("116182806989")
@@ -58,13 +21,6 @@ def test_inverter_config_serial_is_bcd_packed():
     radio_id = protocol.radio_id_from_low32(packed)
     address = bytes((radio_id >> (8 * i)) & 0xFF for i in range(5))
     assert address == bytes.fromhex("01 82 80 69 89")
-
-
-def test_raw_serial_format_matches_bcd_digits_for_hil():
-    protocol = load_protocol_module()
-    assert protocol.radio_id_from_serial_format(
-        "116182806989", "raw"
-    ) == protocol.radio_id_from_serial_format("116182806989", "bcd")
 
 
 def test_crc_known_vectors():
@@ -75,7 +31,9 @@ def test_crc_known_vectors():
 
 def test_realtime_request_uses_ahoy_byte_order():
     protocol = load_protocol_module()
-    inverter_radio_id = protocol.radio_id_from_serial("116182806989")
+    inverter_radio_id = protocol.radio_id_from_low32(
+        protocol.parse_serial_bcd("116182806989")
+    )
     request = protocol.build_realtime_request(
         inverter_radio_id, dtu_serial=0x83915460, timestamp=0x12345678
     )
@@ -87,7 +45,7 @@ def test_realtime_request_uses_ahoy_byte_order():
     # dtu_serial. Reversing either makes the inverter ACK but reject the request
     # (it checks [1..4]) / reply to the wrong address ([5..8]).
     assert request[1:5] == (inverter_radio_id >> 8).to_bytes(4, "little")
-    assert request[1:5] == bytes.fromhex("0d08f1cd")
+    assert request[1:5] == bytes.fromhex("82806989")
     assert request[5:9] == bytes.fromhex("83915460")
     assert request[9:12] == bytes.fromhex("800b00")
     # Timestamp is big-endian on the wire (proven from a live Ahoy capture; Ahoy's
