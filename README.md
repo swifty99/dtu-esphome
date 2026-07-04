@@ -1,8 +1,8 @@
 # ESPHome Hoymiles DTU
 
 External ESPHome component that talks directly to Hoymiles HM-series
-microinverters over an nRF24L01+ radio — no Ahoy, no vendor DTU, no cloud.
-It reads live AC/DC telemetry and can send an active-power-limit command.
+microinverters over an nRF24L01+ radio. It reads live AC/DC telemetry and can
+send an active-power-limit command.
 
 ## Status
 
@@ -37,6 +37,18 @@ Any nRF24L01+ module wired to your ESP's SPI bus, plus two dedicated GPIOs:
   completion is interrupt-driven; otherwise the component falls back to
   high-frequency polling during an exchange. Either way, the ESPHome loop is
   never blocked waiting on the radio.
+
+> [!WARNING]
+> **Add a capacitor across the nRF24L01+ module's VCC/GND, right at the
+> module's pins.** The cheap breakout boards sold everywhere have little to no
+> onboard decoupling, and the radio draws current spikes on TX that a long or
+> thin 3.3V supply line can't keep up with. Without it you'll typically still
+> see the module respond to SPI register reads/writes, but over-the-air comms
+> will be flaky or dead — intermittent ACKs, garbled or missing packets, or no
+> link at all. A 10–100 µF capacitor (electrolytic or tantalum work; add a
+> 100 nF ceramic in parallel if you have one) directly across VCC/GND at the
+> module fixes this in almost all cases. Do not rely on decoupling elsewhere
+> on the board — it needs to be at the module itself.
 
 ## Installation
 
