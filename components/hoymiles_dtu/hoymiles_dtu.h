@@ -100,6 +100,8 @@ class HoymilesDtuComponent : public PollingComponent,
     }
   }
   void set_pa_level(HmPaLevel pa_level) { pa_level_ = pa_level; }
+  void set_scan_detection(bool enabled) { scan_detection_ = enabled; }
+  void set_scan_detected_text_sensor(text_sensor::TextSensor *sensor) { scan_detected_text_sensor_ = sensor; }
   void set_dtu_serial(uint32_t dtu_serial) {
     dtu_serial_ = dtu_serial;
     dtu_serial_configured_ = true;
@@ -142,6 +144,13 @@ class HoymilesDtuComponent : public PollingComponent,
   void log_exchange_summary_(bool success, const char *error, uint32_t now);
   void read_available_packets_();
   bool process_response_(uint32_t now);
+  // Passive scan detection: while idle, listen for foreign DTU requests to our inverter and for
+  // Search-ID broadcasts, then report them. Receive-only — never transmits.
+  void poll_monitor_(uint32_t now);
+  void enter_monitor_(uint32_t now);
+  void exit_monitor_();
+  void read_monitor_packets_(uint32_t now);
+  void report_scan_(const HmSniffResult &sniff, uint32_t now);
   void begin_rx_window_(uint32_t now);
   void publish_radio_error_(const char *error);
   void start_listening_(uint8_t channel);
@@ -169,6 +178,12 @@ class HoymilesDtuComponent : public PollingComponent,
   uint32_t dtu_serial_{0};
   bool dtu_serial_configured_{false};
   bool radio_ok_{false};
+  bool scan_detection_{false};
+  bool monitoring_{false};
+  uint8_t monitor_channel_index_{0};
+  uint32_t monitor_last_hop_ms_{0};
+  uint32_t scan_count_{0};
+  uint32_t scan_last_report_ms_{0};
   uint8_t detected_status_{0xFF};
   uint8_t detected_config_{0xFF};
   uint8_t detected_setup_aw_{0xFF};
@@ -206,6 +221,7 @@ class HoymilesDtuComponent : public PollingComponent,
   std::array<HmFrame, HM_MAX_FRAME_COUNT> frames_{};
   text_sensor::TextSensor *last_rx_payload_text_sensor_{nullptr};
   text_sensor::TextSensor *last_radio_error_text_sensor_{nullptr};
+  text_sensor::TextSensor *scan_detected_text_sensor_{nullptr};
 };
 
 template <typename... Ts>

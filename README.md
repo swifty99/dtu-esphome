@@ -103,6 +103,9 @@ is a standard ESPHome `PollingComponent`, so it accepts the usual
   polls are failing to acquire.
 - `update_interval` (*Optional*, default `15s`): how often each inverter is
   polled for telemetry.
+- `scan_detection` (*Optional*, boolean, default `false`): enable passive,
+  receive-only detection of nearby scanning/probing of Hoymiles inverters.
+  See [Security: detecting scans](#security-detecting-scans).
 - **`inverters`** (**Required**, list, at least one): the inverters this hub
   talks to. See below.
 - Also accepts the standard SPI device options (`spi_id`, `cs_pin`,
@@ -166,11 +169,14 @@ text_sensor:
     dtu_id: dtu
     last_rx_payload: {name: "DTU Last RX Payload"}   # hex dump, diagnostic
     last_radio_error: {name: "DTU Last Radio Error"} # diagnostic
+    scan_detected: {name: "DTU Scan Detected"}       # last detected scan/probe
 ```
 
 `status`/`last_seen` require `inverter_id`; `last_rx_payload`/
-`last_radio_error` are hub-level radio diagnostics and require `dtu_id`.
-At least one of `inverter_id`/`dtu_id` is required per block.
+`last_radio_error`/`scan_detected` are hub-level radio diagnostics and require
+`dtu_id`. At least one of `inverter_id`/`dtu_id` is required per block.
+`scan_detected` only publishes when `scan_detection` is enabled on the hub —
+see [Security: detecting scans](#security-detecting-scans).
 
 ### Actions
 
@@ -201,6 +207,62 @@ button:
 Only the first configured inverter can currently be targeted by this action
 (single-inverter limitation, matching how the DevControl exchange is wired
 today).
+
+## Security: detecting scans
+
+The Hoymiles DTU protocol has no encryption, integrity, or authentication. As
+documented in the CCC report *"Wireless Interface Vulnerabilities of Hoymiles
+Microinverters"* (`docs/hoymiles_dtu_vuln.pdf`), an attacker with a cheap 2.4 GHz
+module can broadcast a **Search-ID** request to enumerate the serial numbers of
+every inverter in radio range, then send valid commands to any of them. **This
+flaw lives in the inverter firmware — no DTU-side software (this component,
+OpenDTU, or AhoyDTU) can close it; only a Hoymiles firmware fix can.**
+
+What this component *can* do is **tell you when it is happening near you**.
+Setting `scan_detection: true` makes the hub, while it is otherwise idle between
+telemetry polls, listen on the HM global Search-ID address and on your
+inverter's own address, hopping the HM channels. Anything it overhears that is a
+foreign DTU **request** is reported to the `scan_detected` text sensor:
+
+- **`Search-ID scan`** — a broadcast serial-enumeration scan (opcode `0x02`).
+- **`info probe`** — an RF info request that also leaks the serial (`0x06`).
+- **`foreign poll`** — a telemetry request aimed at *your* inverter by another
+  DTU (`0x15`).
+- **`FOREIGN DevControl`** — a control command (power limit / on-off) aimed at
+  *your* inverter by another DTU (`0x51`). This is the serious one.
+
+Each report reads like `Search-ID scan | DTU 0x80187264 | ch 40 | #7`, where the
+DTU value is the attacker's own DTU serial (embedded in every request) and `#`
+is a running count. Wire it to a Home Assistant automation to get notified:
+
+```yaml
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_detected: {name: "DTU Scan Detected", id: dtu_scan}
+
+# automation (Home Assistant): notify on any state change of the scan sensor
+```
+
+This is **detection only — there are no countermeasures.** It never transmits a
+request and cannot control the inverter. Honest limitations:
+
+- **Probabilistic.** The monitor and the attacker both hop channels, so it will
+  not catch *every* packet — but scanners transmit repeatedly, so a real scanning
+  run is very likely to be seen over a few seconds. Absence of a report is not
+  proof of absence of scanning.
+- **Blind during its own polls.** One radio cannot listen while it is actively
+  polling telemetry. A longer `update_interval` leaves more time to monitor.
+- **Range-bound.** It only hears transmitters within RF range.
+- **Not perfectly stealthy.** HM dynamic-payload reception is coupled to the
+  nRF24's hardware auto-ACK, so the monitor does ACK what it overhears. This
+  leaks nothing beyond what the (already unauthenticated) protocol exposes, but
+  it is not a silent sniffer.
+- **Targeted-request detection covers the first configured inverter;**
+  Search-ID broadcast detection is inverter-independent.
+- **Not verified on hardware in this repo.** The detector is receive-only, so
+  it cannot cause harm, but whether it catches a given scanner in your RF
+  environment should be confirmed on your own bench.
 
 ## How the HM RF protocol works
 

@@ -9,6 +9,8 @@ CONF_MODEL = "model"
 CONF_PA_LEVEL = "pa_level"
 CONF_PERCENT = "percent"
 CONF_PERSISTENT = "persistent"
+CONF_SCAN_DETECTED = "scan_detected"
+CONF_SCAN_DETECTION = "scan_detection"
 CONF_SERIAL = "serial"
 
 CONF_AC_CURRENT = "ac_current"

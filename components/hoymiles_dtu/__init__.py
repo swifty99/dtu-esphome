@@ -12,6 +12,7 @@ from .const import (
     CONF_PA_LEVEL,
     CONF_PERCENT,
     CONF_PERSISTENT,
+    CONF_SCAN_DETECTION,
     CONF_SERIAL,
 )
 from .protocol import parse_serial_bcd
@@ -76,6 +77,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_PA_LEVEL, default="low"): cv.enum(
                 PA_LEVEL_OPTIONS, lower=True
             ),
+            # Passive, receive-only detection of nearby scanning/probing.
+            cv.Optional(CONF_SCAN_DETECTION, default=False): cv.boolean,
             cv.Required(CONF_INVERTERS): cv.All(
                 cv.ensure_list(INVERTER_SCHEMA), cv.Length(min=1)
             ),
@@ -105,6 +108,7 @@ async def to_code(config):
         irq_pin = await cg.gpio_pin_expression(irq_pin_config)
         cg.add(var.set_irq_pin(irq_pin))
     cg.add(var.set_pa_level(config[CONF_PA_LEVEL]))
+    cg.add(var.set_scan_detection(config[CONF_SCAN_DETECTION]))
 
     for inverter_config in config[CONF_INVERTERS]:
         inverter = cg.new_Pvariable(inverter_config[CONF_ID])

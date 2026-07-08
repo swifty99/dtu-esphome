@@ -329,6 +329,72 @@ const char *hm_model_to_string(HmModel model) {
   return "unknown";
 }
 
+bool hm_classify_sniffed_packet(const uint8_t *packet, uint8_t len, uint64_t our_inverter_radio_id,
+                                uint32_t our_dtu_serial, HmSniffResult *out) {
+  if (packet == nullptr || out == nullptr || len < 11 || len > 32) {
+    return false;
+  }
+  // A genuine DTU->inverter request ends in a CRC8 over the preceding bytes (verified against the
+  // report's on-air Search-ID and collect-info captures). This rejects RF noise and any inverter
+  // response that happens to land on a monitored pipe.
+  if (hm_crc8(packet, len - 1) != packet[len - 1]) {
+    return false;
+  }
+  const uint8_t opcode = packet[0];
+  // Inverter->DTU responses set bit7 (e.g. 0x95, 0xD1). We only flag requests (bit7 clear).
+  if ((opcode & 0x80) != 0) {
+    return false;
+  }
+  // [1..4] is the target inverter id, LSB-first of (radio_id >> 8) == inverter address[1..4].
+  bool targets_our_inverter = true;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (packet[1 + i] != ((our_inverter_radio_id >> (8 * (i + 1))) & 0xFF)) {
+      targets_our_inverter = false;
+      break;
+    }
+  }
+
+  HmSniffResult result;
+  result.opcode = opcode;
+  result.targets_our_inverter = targets_our_inverter;
+  switch (opcode) {
+    case HM_TX_SEARCH_ID:  // broadcast discovery; sender DTU serial sits at [5..8]
+      result.kind = HM_SNIFF_SEARCH_ID;
+      result.sender_dtu_serial = read_u32_be(packet, 5);
+      break;
+    case HM_TX_COLLECT_INFO:  // one byte longer than Search-ID; sender DTU serial sits at [6..9]
+      if (len < 12) {
+        return false;
+      }
+      result.kind = HM_SNIFF_COLLECT_INFO;
+      result.sender_dtu_serial = read_u32_be(packet, 6);
+      break;
+    case HM_TX_REQ_INFO:  // a telemetry poll of our inverter from someone other than us
+      if (!targets_our_inverter) {
+        return false;
+      }
+      result.kind = HM_SNIFF_FOREIGN_POLL;
+      result.sender_dtu_serial = read_u32_be(packet, 5);
+      break;
+    case HM_TX_REQ_DEVCONTROL:  // a control command (power limit / on-off) aimed at our inverter
+      if (!targets_our_inverter) {
+        return false;
+      }
+      result.kind = HM_SNIFF_FOREIGN_CONTROL;
+      result.sender_dtu_serial = read_u32_be(packet, 5);
+      break;
+    default:
+      return false;
+  }
+  // A request carrying our own DTU serial is our traffic, not an intruder (should not occur while
+  // monitoring, but guard against reflections/misconfiguration).
+  if (our_dtu_serial != 0 && result.sender_dtu_serial == our_dtu_serial) {
+    return false;
+  }
+  *out = result;
+  return true;
+}
+
 const char *hm_status_to_string(HmStatus status) {
   switch (status) {
     case OFFLINE:
