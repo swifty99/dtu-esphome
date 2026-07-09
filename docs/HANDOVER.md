@@ -24,7 +24,19 @@ Key code:
 
 Verified so far: native classifier tests (incl. the report's real `0x02`/`0x06`
 captures), `esphome config` on all test YAMLs, and a full ESP32 firmware compile
-with `scan_detection` on. **Not yet verified on-air** — that's tomorrow.
+with `scan_detection` on.
+
+**Validated on-air 2026-07-09** on the hm4_readonly S2 (DTU serial `0x83915460`) against a
+real AhoyDTU (DTU serial `0x80694022`) on inverter `116182806989`. Both AhoyDTU-exercisable
+paths fired end-to-end — DEBUG `Scan packet:` → WARN `Radio scan detected:` → `scan_detected`
+sensor:
+- `foreign poll` (0x15) — caught on both ch 23 and ch 3, confirming channel-hop coverage.
+- `FOREIGN DevControl` (0x51) — on an AhoyDTU active-power-limit set.
+
+`targets_us=1` on both; the reported attacker serial matched AhoyDTU's. AhoyDTU transmitted
+both even with the inverter asleep — detection keys off the attacker's TX, not the inverter's
+reply. The `0x02` Search-ID path stays unexercised by design (needs the report's scanner,
+which was deliberately not built).
 
 ## What AhoyDTU can and cannot exercise
 
