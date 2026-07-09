@@ -211,8 +211,10 @@ today).
 ## Security: detecting scans
 
 The Hoymiles DTU protocol has no encryption, integrity, or authentication. As
-documented in the CCC report *"Wireless Interface Vulnerabilities of Hoymiles
-Microinverters"* (`docs/hoymiles_dtu_vuln.pdf`), an attacker with a cheap 2.4 GHz
+documented in the CCC report [*"Wireless Interface Vulnerabilities of Hoymiles
+Microinverters"*](https://www.ccc.de/system/uploads/382/original/hoymiles_dtu_vuln.pdf)
+(plain-language [writeup](https://www.ccc.de/updates/2026/blinkenlights-hoymiles)),
+an attacker with a cheap 2.4 GHz
 module can broadcast a **Search-ID** request to enumerate the serial numbers of
 every inverter in radio range, then send valid commands to any of them. **This
 flaw lives in the inverter firmware — no DTU-side software (this component,
