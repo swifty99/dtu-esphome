@@ -1,0 +1,94 @@
+substitutions:
+  plug_name: ahoy-dtu-hm4-readonly
+  device_name: ${plug_name}
+
+packages:
+  device_base: !include ../nrf24_probe/packages/device_base_debug.yaml
+  default_diag: !include ../nrf24_probe/packages/default_diag.yaml
+
+esphome:
+  name: ${plug_name}
+  friendly_name: Ahoy DTU HM4 Scan
+  # HIL harness: fire one active discovery scan ~40s after boot (once wifi/time are up and at least
+  # one telemetry poll has bound us to the inverter, which is the collect-info 0x06 case). This is a
+  # test-only one-shot; the shipping trigger is the "Scan for inverters" button below / the action.
+  on_boot:
+    priority: -100
+    then:
+      - delay: 40s
+      - logger.log: "HIL: starting one-shot inverter scan"
+      - hoymiles_dtu.scan_inverters:
+          id: dtu
+          duration: 20s
+          commands: [search_id, collect_info]
+
+esp32:
+  board: esp32-s2-saola-1
+  framework:
+    type: arduino
+
+logger:
+  # DEBUG so the scan's per-probe TX and raw RX are visible on the bench. Drop to INFO once the scan
+  # path is validated (INFO still shows "Scan started / found / complete").
+  level: DEBUG
+  hardware_uart: USB_CDC
+
+time:
+  - platform: sntp
+    id: dtu_time
+
+spi:
+  id: dtu_spi
+  clk_pin: GPIO5
+  mosi_pin: GPIO11
+  miso_pin: GPIO16
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: GPIO9
+  ce_pin: GPIO12
+  irq_pin: GPIO7
+  update_interval: 15s
+  pa_level: max
+  scan_detection: true
+  inverters:
+    - id: hm4
+      serial: "116182806989"
+      model: hm_1200
+
+# Shipping trigger: on-demand active discovery scan. It transmits, so it is only ever a button/action.
+button:
+  - platform: template
+    name: "Scan for inverters"
+    on_press:
+      - hoymiles_dtu.scan_inverters:
+          id: dtu
+          duration: 20s
+          commands: [search_id, collect_info]
+
+sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    ac_power: {name: "HM4 AC Power"}
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_found_count: {name: "HM4 Scan Found"}
+    scan_severity: {name: "HM4 Scan Severity"}
+
+text_sensor:
+  - platform: hoymiles_dtu
+    inverter_id: hm4
+    status: {name: "HM4 Status"}
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_result: {name: "HM4 Scan Result"}
+    scan_detected: {name: "HM4 Scan Detected"}
+    last_rx_payload: {name: "DTU Last RX Payload"}
+    last_radio_error: {name: "DTU Last Radio Error"}

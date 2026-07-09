@@ -170,13 +170,16 @@ text_sensor:
     last_rx_payload: {name: "DTU Last RX Payload"}   # hex dump, diagnostic
     last_radio_error: {name: "DTU Last Radio Error"} # diagnostic
     scan_detected: {name: "DTU Scan Detected"}       # last detected scan/probe
+    scan_result: {name: "DTU Scan Result"}           # last discovered inverter (active scan)
 ```
 
 `status`/`last_seen` require `inverter_id`; `last_rx_payload`/
-`last_radio_error`/`scan_detected` are hub-level radio diagnostics and require
-`dtu_id`. At least one of `inverter_id`/`dtu_id` is required per block.
-`scan_detected` only publishes when `scan_detection` is enabled on the hub —
-see [Security: detecting scans](#security-detecting-scans).
+`last_radio_error`/`scan_detected`/`scan_result` are hub-level radio diagnostics
+and require `dtu_id`. At least one of `inverter_id`/`dtu_id` is required per
+block. `scan_detected` only publishes when `scan_detection` is enabled on the hub
+(see [Security: detecting scans](#security-detecting-scans)); `scan_result` is
+populated by the `scan_inverters` action (see
+[Security: scanning for inverters](#security-scanning-for-inverters)).
 
 ### Actions
 
@@ -207,6 +210,30 @@ button:
 Only the first configured inverter can currently be targeted by this action
 (single-inverter limitation, matching how the DevControl exchange is wired
 today).
+
+**`hoymiles_dtu.scan_inverters`** — starts an active over-the-air discovery scan.
+It **transmits** the discovery requests the CCC report describes (see
+[Security: scanning for inverters](#security-scanning-for-inverters)), so it is
+only ever an on-demand action — there is no config option that would run it on a
+timer. Non-blocking: it runs on the same radio state machine as telemetry, a
+probe at a time, and returns the radio to normal polling when the scan window
+ends.
+
+- `id` (**Required**): the `hoymiles_dtu:` hub to target.
+- `duration` (*Optional*, time period, default `20s`): how long to keep probing.
+- `commands` (*Optional*, list of `search_id` / `collect_info`, default both):
+  which discovery command(s) to send.
+
+```yaml
+button:
+  - platform: template
+    name: "Scan for inverters"
+    on_press:
+      - hoymiles_dtu.scan_inverters:
+          id: dtu
+          duration: 20s
+          commands: [search_id, collect_info]
+```
 
 ## Security: detecting scans
 
@@ -297,6 +324,62 @@ request and cannot control the inverter. Honest limitations:
   AhoyDTU — both `foreign poll` and `FOREIGN DevControl` were detected. It is
   receive-only and cannot cause harm, but whether it catches a *given* scanner in
   *your* RF environment depends on range and timing, so confirm on your own bench.
+
+## Security: scanning for inverters
+
+The active counterpart to detection. Where `scan_detection` listens, the
+**`hoymiles_dtu.scan_inverters`** action *transmits* the discovery requests
+themselves and reports the serials that answer — the same thing AhoyDTU,
+OpenDTU, and the CCC report's proof-of-concept scanner do. Two legitimate uses,
+both on hardware you own or are authorised to assess:
+
+- **Onboarding** — discover the serial and model of your own inverter over the
+  air instead of reading the packed-BCD label by eye.
+- **Exposure auditing** — enumerate the Hoymiles inverters within radio range of
+  your site to see what an attacker with a cheap module would see.
+
+Stated plainly: this **transmits the exact requests the CCC report describes as
+the attack**, and exploits the same firmware flaw. It is therefore an **on-demand
+action only** — never a config option, never on a timer — and it only *reads*
+serials: it sends no on/off, power-limit, or firmware command, so it cannot
+change an inverter's operating state. Run it only against inverters you own or
+are authorised to assess. Full design: [`docs/scanner-spec.md`](docs/scanner-spec.md).
+
+A scan broadcasts two discovery commands across the HM channels for its
+`duration`:
+
+- **`search_id`** — the Search-ID (Gongfa, `0x02`) broadcast. An inverter that
+  is not currently being polled by a DTU answers with its serial and model. It
+  goes quiet a few minutes after a DTU last polled it.
+- **`collect_info`** — the RF-info (`0x06`) probe. It leaks the serial **even
+  while the inverter is bound to a DTU**, so it is the fallback that works in a
+  live install (where your own DTU is polling continuously).
+
+Results are published to two hub-level entities:
+
+```yaml
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_found_count: {name: "DTU Scan Found"}   # unique inverters found this scan
+
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_result: {name: "DTU Scan Result"}       # each newly discovered inverter, one line
+```
+
+Each `scan_result` line reads like
+`serial ...82806989 | PID 0x1144 | via search-id | ch 40 | #1`: the `serial` is
+the discovered **last 8 printed digits** (packed BCD — enough to address the
+inverter; the printed 4-digit model prefix is not transmitted, complete it from
+the label), `PID` is the model/product ID (`search_id` only; `-` for
+`collect_info`), and `#` is a running count. A scan that finds nothing publishes
+`no inverters found`.
+
+Limitations mirror detection: HM (2.4 GHz) only, probabilistic and range-bound,
+and — because it transmits — it will trip other detectors in range, including
+another node's own `scan_detection`.
 
 ## How the HM RF protocol works
 

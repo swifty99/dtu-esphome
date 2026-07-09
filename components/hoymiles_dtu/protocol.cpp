@@ -427,6 +427,77 @@ const char *hm_severity_to_string(HmSeverity severity) {
   return "NONE";
 }
 
+uint8_t hm_build_search_id_request(uint32_t dtu_serial, uint8_t *buffer, size_t buffer_len) {
+  if (buffer == nullptr || buffer_len < 11) {
+    return 0;
+  }
+  memset(buffer, 0, 11);
+  buffer[0] = HM_TX_SEARCH_ID;
+  // [1..4] is the target inverter id; a broadcast discovery leaves it zero ("do not matter" per the
+  // CCC report section 4.3) so every in-range inverter treats itself as addressed. [5..8] is our DTU
+  // address, big-endian, and is where the reply is sent (same slot as hm_build_realtime_request).
+  write_hm_u32_be(&buffer[5], dtu_serial);
+  buffer[9] = 0x00;
+  buffer[10] = hm_crc8(buffer, 10);  // discovery requests carry only the app-layer CRC8, no CRC16
+  return 11;
+}
+
+uint8_t hm_build_collect_info_request(uint32_t dtu_serial, uint8_t *buffer, size_t buffer_len) {
+  if (buffer == nullptr || buffer_len < 12) {
+    return 0;
+  }
+  memset(buffer, 0, 12);
+  buffer[0] = HM_TX_COLLECT_INFO;
+  // One wildcard byte longer than Search-ID: the DTU address sits at [6..9] (the same offset
+  // hm_classify_sniffed_packet reads back out of an overheard 0x06 probe).
+  write_hm_u32_be(&buffer[6], dtu_serial);
+  buffer[10] = 0x00;
+  buffer[11] = hm_crc8(buffer, 11);
+  return 12;
+}
+
+bool hm_parse_search_id_response(const uint8_t *packet, uint8_t len, HmDiscoveredInverter *out) {
+  // Reply layout (CCC report fig. 3, HMS-600 RX): [0]=0x82 (0x02 | all-frames), [1..4]=serial suffix
+  // BCD, [5..8]=echoed DTU address, [9..10]=model PID, then a serial echo, then a trailing CRC8.
+  if (packet == nullptr || out == nullptr || len < 11) {
+    return false;
+  }
+  if (packet[0] != (HM_TX_SEARCH_ID | HM_ALL_FRAMES)) {
+    return false;
+  }
+  if (hm_crc8(packet, len - 1) != packet[len - 1]) {
+    return false;
+  }
+  HmDiscoveredInverter result;
+  result.serial_suffix = read_u32_be(packet, 1);
+  result.responder_dtu_serial = read_u32_be(packet, 5);
+  // PID is only trustworthy on the full-length reply; a shorter reply would put its CRC8 where the
+  // PID bytes sit, so leave it 0 there rather than reporting a garbage model.
+  result.pid = len >= 16 ? read_u16_be(packet, 9) : 0;
+  *out = result;
+  return true;
+}
+
+bool hm_parse_collect_info_response(const uint8_t *packet, uint8_t len, HmDiscoveredInverter *out) {
+  // Reply layout (CCC report section 4.3 RX): [0]=0x06 (a firmware quirk — a spec-correct reply
+  // would set the response bit, 0x86), [1..4]=0, [5..8]=serial suffix BCD, then a trailing CRC8. No
+  // PID/payload, so the model is not learned from this path.
+  if (packet == nullptr || out == nullptr || len < 11) {
+    return false;
+  }
+  if (packet[0] != HM_TX_COLLECT_INFO && packet[0] != (HM_TX_COLLECT_INFO | HM_ALL_FRAMES)) {
+    return false;
+  }
+  if (hm_crc8(packet, len - 1) != packet[len - 1]) {
+    return false;
+  }
+  HmDiscoveredInverter result;
+  result.serial_suffix = read_u32_be(packet, 5);
+  result.pid = 0;
+  *out = result;
+  return true;
+}
+
 const char *hm_status_to_string(HmStatus status) {
   switch (status) {
     case OFFLINE:

@@ -140,5 +140,39 @@ bool hm_classify_sniffed_packet(const uint8_t *packet, uint8_t len, uint64_t our
 HmSeverity hm_sniff_severity(HmSniffKind kind);
 const char *hm_severity_to_string(HmSeverity severity);
 
+// --- Active discovery / scanner (transmit) -------------------------------------------------------
+// The transmit-side counterpart to hm_classify_sniffed_packet: build the discovery requests the CCC
+// report (section 4) documents for harvesting inverter serials, and parse the replies. Intended for
+// discovering the serial/model of an inverter you own (so you need not read the packed-BCD label by
+// eye) and for auditing your own RF exposure. It exploits the same unauthenticated-protocol flaw the
+// report describes; only run it against inverters you own or are authorised to assess.
+struct HmDiscoveredInverter {
+  // Last 8 printed serial digits, packed BCD. This equals serial & 0xFFFFFFFF and the low 4 radio
+  // address bytes; the printed 4-digit model prefix is not carried over the air.
+  uint32_t serial_suffix{0};
+  uint16_t pid{0};                   // model/product ID (Search-ID reply only; 0 for a collect-info reply)
+  uint32_t responder_dtu_serial{0};  // the DTU address the inverter echoed back (our scan sender id)
+};
+
+// Build the "Search ID" (Gongfa, opcode 0x02) broadcast discovery request. Transmitted to the HM
+// global Search-ID address (HM_SEARCH_ID_ADDRESS); an in-range inverter not currently bound to a DTU
+// replies with its serial (see hm_parse_search_id_response). Discovery requests carry only the
+// app-layer CRC8, no CRC16. Returns the packet length (11) or 0 on error.
+uint8_t hm_build_search_id_request(uint32_t dtu_serial, uint8_t *buffer, size_t buffer_len);
+
+// Build the "Collect RF hw/sw info" (opcode 0x06) discovery request. It leaks the serial even while
+// the inverter is bound to a DTU, so it is the Search-ID fallback. Returns the length (12) or 0.
+uint8_t hm_build_collect_info_request(uint32_t dtu_serial, uint8_t *buffer, size_t buffer_len);
+
+// Parse a reply to a Search-ID request (opcode 0x82 = 0x02 | all-frames). Fills *out with the
+// discovered serial suffix, echoed DTU serial, and (on the full-length reply) model PID. Validates
+// the trailing CRC8. Returns false on a malformed reply.
+bool hm_parse_search_id_response(const uint8_t *packet, uint8_t len, HmDiscoveredInverter *out);
+
+// Parse a reply to a Collect-Info request. The observed reply echoes opcode 0x06 (a firmware quirk;
+// a spec-correct reply would set the response bit, 0x86) — both are accepted. Fills the serial
+// suffix; pid stays 0 (a collect-info reply carries no PID). Validates CRC8.
+bool hm_parse_collect_info_response(const uint8_t *packet, uint8_t len, HmDiscoveredInverter *out);
+
 }  // namespace hoymiles_dtu
 }  // namespace esphome

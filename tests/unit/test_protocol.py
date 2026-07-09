@@ -53,3 +53,28 @@ def test_realtime_request_uses_ahoy_byte_order():
     assert request[12:16] == bytes.fromhex("12345678")
     assert request[24:26] == protocol.crc16(request[10:24]).to_bytes(2, "big")
     assert request[26] == protocol.crc8(request[:26])
+
+
+def test_search_id_request_matches_ccc_capture():
+    # The active scanner's Search-ID (0x02) broadcast must reproduce the exact on-air
+    # bytes captured in the CCC report (fig. 3 TX), DTU serial 0x80187264 — the same
+    # wire format the passive detector classifies as HM_SNIFF_SEARCH_ID.
+    protocol = load_protocol_module()
+    request = protocol.build_search_id_request(0x80187264)
+    assert request == bytes.fromhex("020000000080187264008C")
+    assert len(request) == 11
+    assert request[0] == 0x02
+    assert request[5:9] == bytes.fromhex("80187264")
+    assert request[10] == protocol.crc8(request[:10])
+
+
+def test_collect_info_request_matches_ccc_capture():
+    # The collect-info (0x06) probe from the report (section 4.3 TX), DTU serial
+    # 0x80187265. One wildcard byte longer than Search-ID, so the DTU address is [6..9].
+    protocol = load_protocol_module()
+    request = protocol.build_collect_info_request(0x80187265)
+    assert request == bytes.fromhex("060000000000801872650089")
+    assert len(request) == 12
+    assert request[0] == 0x06
+    assert request[6:10] == bytes.fromhex("80187265")
+    assert request[11] == protocol.crc8(request[:11])

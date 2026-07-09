@@ -6,6 +6,8 @@ from esphome.const import CONF_ID
 
 from .const import (
     CONF_CE_PIN,
+    CONF_COMMANDS,
+    CONF_DURATION,
     CONF_INVERTERS,
     CONF_IRQ_PIN,
     CONF_MODEL,
@@ -31,6 +33,13 @@ HmPaLevel = hoymiles_dtu_ns.enum("HmPaLevel")
 RadioSetPowerLimitAction = hoymiles_dtu_ns.class_(
     "RadioSetPowerLimitAction", automation.Action
 )
+ScanInvertersAction = hoymiles_dtu_ns.class_("ScanInvertersAction", automation.Action)
+
+# Discovery-command bitmask, kept in sync with HM_SCAN_CMD_* in hoymiles_dtu.h.
+SCAN_COMMAND_BITS = {
+    "search_id": 0x01,
+    "collect_info": 0x02,
+}
 
 # Same HM families Ahoy supports over nRF24, keyed by DC-input count:
 # 1-channel HM-300/350/400, 2-channel HM-600/700/800, 4-channel HM-1000/1200/1500.
@@ -141,4 +150,39 @@ async def radio_set_power_limit_to_code(config, action_id, template_arg, args):
     persistent = await cg.templatable(config[CONF_PERSISTENT], args, cg.bool_)
     cg.add(var.set_percent(percent))
     cg.add(var.set_persistent(persistent))
+    return var
+
+
+# Active over-the-air discovery scan. Transmits, so it is only ever an on-demand
+# action — there is no config toggle that would run it on a timer.
+# See docs/scanner-spec.md.
+SCAN_INVERTERS_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HoymilesDtuComponent),
+        cv.Optional(CONF_DURATION, default="20s"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_COMMANDS, default=["search_id", "collect_info"]): cv.All(
+            cv.ensure_list(cv.one_of(*SCAN_COMMAND_BITS, lower=True)),
+            cv.Length(min=1),
+        ),
+    }
+)
+
+
+@automation.register_action(
+    "hoymiles_dtu.scan_inverters",
+    ScanInvertersAction,
+    SCAN_INVERTERS_ACTION_SCHEMA,
+)
+async def scan_inverters_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    duration = await cg.templatable(
+        config[CONF_DURATION].total_milliseconds, args, cg.uint32
+    )
+    cg.add(var.set_duration(duration))
+    bitmask = 0
+    for name in config[CONF_COMMANDS]:
+        bitmask |= SCAN_COMMAND_BITS[name]
+    commands = await cg.templatable(bitmask, args, cg.uint8)
+    cg.add(var.set_commands(commands))
     return var

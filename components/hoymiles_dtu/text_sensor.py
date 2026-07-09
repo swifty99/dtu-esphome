@@ -11,6 +11,7 @@ from .const import (
     CONF_LAST_RX_PAYLOAD,
     CONF_LAST_SEEN,
     CONF_SCAN_DETECTED,
+    CONF_SCAN_RESULT,
     CONF_STATUS,
 )
 
@@ -31,6 +32,9 @@ DTU_TEXT_SENSOR_TYPES = {
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
     ),
     CONF_SCAN_DETECTED: text_sensor.text_sensor_schema(
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+    ),
+    CONF_SCAN_RESULT: text_sensor.text_sensor_schema(
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
     ),
 }

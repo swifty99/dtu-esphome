@@ -39,6 +39,7 @@ from .const import (
     CONF_INVERTER_ID,
     CONF_POWER_FACTOR,
     CONF_REACTIVE_POWER,
+    CONF_SCAN_FOUND_COUNT,
     CONF_SCAN_SEVERITY,
     CONF_TEMPERATURE,
     CONF_YIELD_TODAY,
@@ -134,6 +135,11 @@ DTU_SENSOR_TYPES = {
         accuracy_decimals=0,
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         icon="mdi:shield-alert",
+    ),
+    CONF_SCAN_FOUND_COUNT: sensor.sensor_schema(
+        accuracy_decimals=0,
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        icon="mdi:radar",
     ),
 }
 

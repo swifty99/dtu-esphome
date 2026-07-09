@@ -23,6 +23,11 @@ enum HmPaLevel : uint8_t {
   PA_MAX = 3,
 };
 
+// Discovery commands the active scanner may transmit, as a bitmask (see scan_inverters). Kept in
+// sync with the Python `commands:` option mapping in __init__.py.
+static constexpr uint8_t HM_SCAN_CMD_SEARCH_ID = 0x01;
+static constexpr uint8_t HM_SCAN_CMD_COLLECT_INFO = 0x02;
+
 struct HmChannelSensors {
   sensor::Sensor *dc_voltage{nullptr};
   sensor::Sensor *dc_current{nullptr};
@@ -103,6 +108,8 @@ class HoymilesDtuComponent : public PollingComponent,
   void set_scan_detection(bool enabled) { scan_detection_ = enabled; }
   void set_scan_detected_text_sensor(text_sensor::TextSensor *sensor) { scan_detected_text_sensor_ = sensor; }
   void set_scan_severity_sensor(sensor::Sensor *sensor) { scan_severity_sensor_ = sensor; }
+  void set_scan_result_text_sensor(text_sensor::TextSensor *sensor) { scan_result_text_sensor_ = sensor; }
+  void set_scan_found_count_sensor(sensor::Sensor *sensor) { scan_found_count_sensor_ = sensor; }
   void set_dtu_serial(uint32_t dtu_serial) {
     dtu_serial_ = dtu_serial;
     dtu_serial_configured_ = true;
@@ -112,6 +119,10 @@ class HoymilesDtuComponent : public PollingComponent,
   void set_last_radio_error_text_sensor(text_sensor::TextSensor *sensor) { last_radio_error_text_sensor_ = sensor; }
 
   void radio_set_power_limit(uint16_t percent, bool persistent);
+  // Start an active over-the-air discovery scan. Broadcasts Search-ID (0x02) and/or collect-info
+  // (0x06) requests across the HM channels for duration_ms and reports every inverter that answers.
+  // commands is a bitmask of HM_SCAN_CMD_*; 0 means both. User-initiated only; never runs on a timer.
+  void scan_inverters(uint32_t duration_ms, uint8_t commands);
 
   void setup() override;
   void update() override;
@@ -128,6 +139,7 @@ class HoymilesDtuComponent : public PollingComponent,
   enum class ExchangeKind : uint8_t {
     TELEMETRY,
     DEV_CONTROL,
+    SCAN,
   };
 
   bool setup_radio_();
@@ -152,6 +164,18 @@ class HoymilesDtuComponent : public PollingComponent,
   void exit_monitor_();
   void read_monitor_packets_(uint32_t now);
   void report_scan_(const HmSniffResult &sniff, uint32_t now);
+  // Active scanner (transmit-side discovery). A scan runs as a sequence of probes: each probe sends
+  // one discovery command on one HM channel, then listens for replies on the DTU address before
+  // advancing. Reuses the same non-blocking TX/RX machinery as telemetry (ExchangeKind::SCAN).
+  void start_scan_(uint32_t now);
+  void transmit_scan_probe_(uint32_t now);
+  void poll_scan_tx_(uint32_t now);
+  void begin_scan_rx_window_(uint32_t now);
+  void poll_scan_rx_(uint32_t now);
+  void advance_scan_probe_(uint32_t now);
+  void finish_scan_(uint32_t now);
+  void handle_scan_packet_(const uint8_t *packet, uint8_t len, uint32_t now);
+  void report_discovered_(const HmDiscoveredInverter &inverter, bool via_search_id, uint32_t now);
   void begin_rx_window_(uint32_t now);
   void publish_radio_error_(const char *error);
   void start_listening_(uint8_t channel);
@@ -185,6 +209,21 @@ class HoymilesDtuComponent : public PollingComponent,
   uint32_t monitor_last_hop_ms_{0};
   uint32_t scan_count_{0};
   uint32_t scan_last_report_ms_{0};
+  // Active scanner runtime. A scan is requested by the action (scan_pending_) and then driven probe
+  // by probe from loop() until scan_duration_ms_ elapses; discovered serials are deduplicated in
+  // scan_seen_serials_ so each inverter is reported once.
+  static constexpr uint8_t SCAN_MAX_RESULTS = 32;
+  bool scan_pending_{false};
+  uint32_t scan_duration_ms_{0};
+  uint8_t scan_commands_{0};
+  uint32_t scan_started_ms_{0};
+  uint8_t scan_probe_channel_index_{0};
+  bool scan_probe_collect_info_{false};
+  uint32_t scan_rx_started_ms_{0};
+  uint8_t scan_rx_channel_index_{0};
+  uint32_t scan_rx_last_hop_ms_{0};
+  uint8_t scan_found_count_{0};
+  uint32_t scan_seen_serials_[SCAN_MAX_RESULTS]{};
   uint8_t detected_status_{0xFF};
   uint8_t detected_config_{0xFF};
   uint8_t detected_setup_aw_{0xFF};
@@ -224,6 +263,8 @@ class HoymilesDtuComponent : public PollingComponent,
   text_sensor::TextSensor *last_radio_error_text_sensor_{nullptr};
   text_sensor::TextSensor *scan_detected_text_sensor_{nullptr};
   sensor::Sensor *scan_severity_sensor_{nullptr};
+  text_sensor::TextSensor *scan_result_text_sensor_{nullptr};
+  sensor::Sensor *scan_found_count_sensor_{nullptr};
 };
 
 template <typename... Ts>
@@ -234,6 +275,17 @@ class RadioSetPowerLimitAction : public Action<Ts...>, public Parented<HoymilesD
 
   void play(const Ts &...x) override {
     this->parent_->radio_set_power_limit(this->percent_.value(x...), this->persistent_.value(x...));
+  }
+};
+
+template <typename... Ts>
+class ScanInvertersAction : public Action<Ts...>, public Parented<HoymilesDtuComponent> {
+ public:
+  TEMPLATABLE_VALUE(uint32_t, duration)
+  TEMPLATABLE_VALUE(uint8_t, commands)
+
+  void play(const Ts &...x) override {
+    this->parent_->scan_inverters(this->duration_.value(x...), this->commands_.value(x...));
   }
 };
 

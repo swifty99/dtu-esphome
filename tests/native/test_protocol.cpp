@@ -397,6 +397,87 @@ static void test_classify_sniffed() {
   CHECK(strcmp(hm_severity_to_string(HM_SEVERITY_HIGH), "HIGH") == 0);
 }
 
+// Active scanner: build the two discovery requests and confirm they reproduce the exact on-air bytes
+// captured in the CCC report (section 4). The transmit side must agree with the receive-side
+// classifier, so a request we build is also what the passive detector recognises.
+static void test_scan_requests() {
+  const uint32_t dtu = 0x80187264UL;
+  uint8_t sid[32];
+  const uint8_t sid_len = hm_build_search_id_request(dtu, sid, sizeof(sid));
+  CHECK(sid_len == 11);
+  // Report fig. 3 TX: 02 00 00 00 00 80 18 72 64 00 8C.
+  const uint8_t expect_sid[11] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x64, 0x00, 0x8C};
+  CHECK(memcmp(sid, expect_sid, sizeof(expect_sid)) == 0);
+
+  uint8_t ci[32];
+  const uint8_t ci_len = hm_build_collect_info_request(0x80187265UL, ci, sizeof(ci));
+  CHECK(ci_len == 12);
+  // Report section 4.3 TX: 06 00 00 00 00 00 80 18 72 65 00 89 (one wildcard byte longer, serial +1).
+  const uint8_t expect_ci[12] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x65, 0x00, 0x89};
+  CHECK(memcmp(ci, expect_ci, sizeof(expect_ci)) == 0);
+
+  // Undersized buffers are rejected.
+  CHECK(hm_build_search_id_request(dtu, sid, 10) == 0);
+  CHECK(hm_build_collect_info_request(dtu, ci, 11) == 0);
+
+  // Round-trip: what the scanner transmits is exactly what the passive detector classifies.
+  const uint64_t inv = hm_radio_id_from_serial(0x116182806989ULL);
+  HmSniffResult s;
+  CHECK(hm_classify_sniffed_packet(sid, sid_len, inv, 0x83915460UL, &s));
+  CHECK(s.kind == HM_SNIFF_SEARCH_ID && s.sender_dtu_serial == dtu);
+  CHECK(hm_classify_sniffed_packet(ci, ci_len, inv, 0x83915460UL, &s));
+  CHECK(s.kind == HM_SNIFF_COLLECT_INFO && s.sender_dtu_serial == 0x80187265UL);
+}
+
+// Active scanner: parse discovery replies, using the report's real HMS-600 captures.
+static void test_scan_responses() {
+  HmDiscoveredInverter d;
+  // Report fig. 3 RX_raw: serial suffix 84 56 00 17 (BCD), echoed DTU 80 18 72 64, PID 0x1144.
+  const uint8_t sid_resp[] = {0x82, 0x84, 0x56, 0x00, 0x17, 0x80, 0x18, 0x72,
+                              0x64, 0x11, 0x44, 0x84, 0x56, 0x00, 0x17, 0x59};
+  CHECK(hm_parse_search_id_response(sid_resp, sizeof(sid_resp), &d));
+  CHECK(d.serial_suffix == 0x84560017UL);
+  CHECK(d.pid == 0x1144);
+  CHECK(d.responder_dtu_serial == 0x80187264UL);
+
+  // Report section 4.3 RX: 06 00 00 00 00 85 03 40 22 00 E2 — serial 85 03 40 22, no PID.
+  const uint8_t ci_resp[] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x85, 0x03, 0x40, 0x22, 0x00, 0xE2};
+  CHECK(hm_parse_collect_info_response(ci_resp, sizeof(ci_resp), &d));
+  CHECK(d.serial_suffix == 0x85034022UL);
+  CHECK(d.pid == 0);
+
+  // A collect-info reply that sets the response bit (0x86, the spec-correct form) is also accepted.
+  uint8_t ci_ok[11];
+  memcpy(ci_ok, ci_resp, sizeof(ci_ok));
+  ci_ok[0] = 0x86;
+  ci_ok[10] = hm_crc8(ci_ok, 10);
+  CHECK(hm_parse_collect_info_response(ci_ok, sizeof(ci_ok), &d) && d.serial_suffix == 0x85034022UL);
+
+  // "Discover my own serial": a Search-ID reply for our HM-1200 yields the last 8 printed digits
+  // (82806989) — which is serial & 0xFFFFFFFF and the low 4 radio-address bytes.
+  uint8_t mine[16];
+  memcpy(mine, sid_resp, sizeof(mine));
+  put32(mine, 1, 0x82806989UL);
+  put32(mine, 11, 0x82806989UL);
+  mine[15] = hm_crc8(mine, 15);
+  CHECK(hm_parse_search_id_response(mine, sizeof(mine), &d));
+  CHECK(d.serial_suffix == static_cast<uint32_t>(0x116182806989ULL & 0xFFFFFFFFUL));
+  uint8_t addr[5];
+  hm_radio_id_to_address(hm_radio_id_from_serial(0x116182806989ULL), addr);
+  CHECK(addr[1] == 0x82 && addr[2] == 0x80 && addr[3] == 0x69 && addr[4] == 0x89);
+
+  // Corrupted CRC8, a request opcode instead of a reply, and runt packets are rejected.
+  uint8_t bad[16];
+  memcpy(bad, sid_resp, sizeof(bad));
+  bad[15] ^= 0xFF;
+  CHECK(!hm_parse_search_id_response(bad, sizeof(bad), &d));
+  memcpy(bad, sid_resp, sizeof(bad));
+  bad[0] = 0x02;  // the request opcode, not the 0x82 reply
+  CHECK(!hm_parse_search_id_response(bad, sizeof(bad), &d));
+  CHECK(!hm_parse_search_id_response(sid_resp, 8, &d));
+  CHECK(!hm_parse_collect_info_response(ci_resp, 8, &d));
+}
+
 int main() {
   test_crc_vectors();
   test_radio_id_and_address();
@@ -408,6 +489,8 @@ int main() {
   test_decode_4ch();
   test_decode_4ch_golden_capture();
   test_classify_sniffed();
+  test_scan_requests();
+  test_scan_responses();
   if (g_failures == 0) {
     std::printf("OK: all native protocol tests passed\n");
     return 0;
