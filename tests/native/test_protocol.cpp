@@ -333,6 +333,70 @@ static void test_decode_4ch_golden_capture() {
   CHECK_NEAR(dc_power, 16.0f);
 }
 
+// Passive scan detector: classify DTU->inverter requests overheard on a monitored pipe. Uses the
+// two real on-air captures from the CCC report so the offsets and CRC8 handling match the wild.
+static void test_classify_sniffed() {
+  const uint64_t our_inv = hm_radio_id_from_serial(0x116182806989ULL);  // address 01 82 80 69 89
+  const uint32_t our_dtu = 0x83915460UL;
+  HmSniffResult r;
+
+  // Real Search-ID broadcast (report fig. 3), attacker DTU serial 0x80187264.
+  const uint8_t search_id[] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x64, 0x00, 0x8C};
+  CHECK(hm_classify_sniffed_packet(search_id, sizeof(search_id), our_inv, our_dtu, &r));
+  CHECK(r.kind == HM_SNIFF_SEARCH_ID && r.sender_dtu_serial == 0x80187264UL);
+  CHECK(r.severity == HM_SEVERITY_MEDIUM);
+
+  // Real 0x06 collect-info probe (report sec 4.3), serial one byte later at 0x80187265.
+  const uint8_t collect[] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x65, 0x00, 0x89};
+  CHECK(hm_classify_sniffed_packet(collect, sizeof(collect), our_inv, our_dtu, &r));
+  CHECK(r.kind == HM_SNIFF_COLLECT_INFO && r.sender_dtu_serial == 0x80187265UL);
+  CHECK(r.severity == HM_SEVERITY_MEDIUM);
+
+  // A foreign DevControl aimed at OUR inverter -> flagged as the most serious case.
+  uint8_t ctrl[32];
+  uint8_t clen = hm_build_power_limit_request(our_inv, 0x11223344UL, 0, true, ctrl, sizeof(ctrl));
+  CHECK(clen == 19);
+  CHECK(hm_classify_sniffed_packet(ctrl, clen, our_inv, our_dtu, &r));
+  CHECK(r.kind == HM_SNIFF_FOREIGN_CONTROL && r.targets_our_inverter && r.sender_dtu_serial == 0x11223344UL);
+  CHECK(r.severity == HM_SEVERITY_CRITICAL);
+
+  // A foreign telemetry poll (0x15) aimed at OUR inverter -> high severity.
+  uint8_t poll[32];
+  const uint8_t plen2 = hm_build_realtime_request(our_inv, 0x11223344UL, 0x64656667UL, poll, sizeof(poll));
+  CHECK(plen2 == 27);
+  CHECK(hm_classify_sniffed_packet(poll, plen2, our_inv, our_dtu, &r));
+  CHECK(r.kind == HM_SNIFF_FOREIGN_POLL && r.targets_our_inverter && r.severity == HM_SEVERITY_HIGH);
+
+  // Our own DevControl (sender == our DTU serial) is not an intrusion.
+  clen = hm_build_power_limit_request(our_inv, our_dtu, 50, true, ctrl, sizeof(ctrl));
+  CHECK(!hm_classify_sniffed_packet(ctrl, clen, our_inv, our_dtu, &r));
+
+  // A control command to a DIFFERENT inverter is not our concern.
+  const uint64_t other_inv = hm_radio_id_from_serial(0x114180000000ULL);
+  clen = hm_build_power_limit_request(other_inv, 0x11223344UL, 0, true, ctrl, sizeof(ctrl));
+  CHECK(!hm_classify_sniffed_packet(ctrl, clen, our_inv, our_dtu, &r));
+
+  // Corrupted CRC8, an inverter response (bit7 set), and a runt packet are all rejected.
+  uint8_t bad[11];
+  memcpy(bad, search_id, sizeof(bad));
+  bad[10] ^= 0xFF;
+  CHECK(!hm_classify_sniffed_packet(bad, sizeof(bad), our_inv, our_dtu, &r));
+  uint8_t resp[11];
+  memcpy(resp, search_id, sizeof(resp));
+  resp[0] = 0x95;
+  resp[10] = hm_crc8(resp, 10);
+  CHECK(!hm_classify_sniffed_packet(resp, sizeof(resp), our_inv, our_dtu, &r));
+  CHECK(!hm_classify_sniffed_packet(search_id, 8, our_inv, our_dtu, &r));
+
+  // Direct severity mapping + labels.
+  CHECK(hm_sniff_severity(HM_SNIFF_SEARCH_ID) == HM_SEVERITY_MEDIUM);
+  CHECK(hm_sniff_severity(HM_SNIFF_FOREIGN_POLL) == HM_SEVERITY_HIGH);
+  CHECK(hm_sniff_severity(HM_SNIFF_FOREIGN_CONTROL) == HM_SEVERITY_CRITICAL);
+  CHECK(hm_sniff_severity(HM_SNIFF_NONE) == HM_SEVERITY_NONE);
+  CHECK(strcmp(hm_severity_to_string(HM_SEVERITY_CRITICAL), "CRITICAL") == 0);
+  CHECK(strcmp(hm_severity_to_string(HM_SEVERITY_HIGH), "HIGH") == 0);
+}
+
 int main() {
   test_crc_vectors();
   test_radio_id_and_address();
@@ -343,6 +407,7 @@ int main() {
   test_decode_2ch();
   test_decode_4ch();
   test_decode_4ch_golden_capture();
+  test_classify_sniffed();
   if (g_failures == 0) {
     std::printf("OK: all native protocol tests passed\n");
     return 0;

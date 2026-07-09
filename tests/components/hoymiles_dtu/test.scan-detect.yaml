@@ -1,0 +1,60 @@
+substitutions:
+  board: esp32dev
+  framework: arduino
+  sck_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  cs_pin: GPIO5
+  ce_pin: GPIO4
+  irq_pin: GPIO16
+
+esphome:
+  name: hoymiles-dtu-scan-detect
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+spi:
+  id: dtu_spi
+  clk_pin: ${sck_pin}
+  mosi_pin: ${mosi_pin}
+  miso_pin: ${miso_pin}
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: ${cs_pin}
+  ce_pin: ${ce_pin}
+  irq_pin: ${irq_pin}
+  update_interval: 30s
+  pa_level: low
+  # Passive, receive-only detection of nearby Search-ID scans / foreign control of this inverter.
+  scan_detection: true
+  inverters:
+    - id: hm4
+      serial: "114180000000"
+      model: hm_1500
+
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_severity:
+      name: "DTU Scan Severity"
+
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_detected:
+      name: "DTU Scan Detected"
+    last_radio_error:
+      name: "DTU Last Radio Error"

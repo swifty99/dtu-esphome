@@ -57,6 +57,10 @@ static constexpr uint8_t MAX_TX_ATTEMPTS = 30;
 // On a partial record (link is up, some fragments missing), re-request the whole record this many
 // times before failing the exchange. Each re-request keeps already-received fragments.
 static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
+// Passive scan monitor: dwell this long per channel before hopping, so a channel-hopping attacker's
+// bursts overlap our listen window; and rate-limit reports so a continuous scan does not spam.
+static constexpr uint32_t MONITOR_CHANNEL_DWELL_MS = 20;
+static constexpr uint32_t SCAN_REPORT_THROTTLE_MS = 2000;
 
 void HoymilesDtuInverter::set_serial(uint64_t serial) {
   serial_ = serial;
@@ -224,8 +228,13 @@ void HoymilesDtuComponent::loop() {
   switch (request_state_) {
     case RequestState::IDLE:
       if (power_limit_pending_) {
+        if (monitoring_) {
+          exit_monitor_();
+        }
         power_limit_pending_ = false;
         start_power_limit_request_(now);
+      } else if (scan_detection_) {
+        poll_monitor_(now);
       }
       break;
     case RequestState::WAIT_TX_IRQ:
@@ -248,6 +257,11 @@ void HoymilesDtuComponent::dump_config() {
                 detected_config_, detected_setup_aw_, detected_rf_setup_);
   LOG_UPDATE_INTERVAL(this);
   ESP_LOGCONFIG(TAG, "  DTU serial: 0x%08X", dtu_serial_);
+  // Scan detection is passive/receive-only. Note: HM dynamic-payload reception is coupled to
+  // hardware auto-ACK on the nRF24, so the monitor does ACK what it overhears; this leaks nothing
+  // beyond what the (already unauthenticated) protocol exposes, but it is not perfectly stealthy.
+  ESP_LOGCONFIG(TAG, "  Scan detection: %s",
+                scan_detection_ ? "enabled (passive; listens on inverter + Search-ID address)" : "disabled");
   for (auto *inverter : inverters_) {
     ESP_LOGCONFIG(TAG, "  Inverter serial=%012llX model=%s status=%s last_seen=%us error=%s", inverter->get_serial(),
                   hm_model_to_string(inverter->get_model()), hm_status_to_string(inverter->get_status()),
@@ -326,6 +340,9 @@ void IRAM_ATTR HoymilesDtuComponent::irq_handler_(HoymilesDtuComponent *arg) {
 }
 
 void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_t now) {
+  if (monitoring_) {
+    exit_monitor_();
+  }
   active_inverter_ = inverter;
   active_inverter_->mark_poll_started(now);
   exchange_kind_ = ExchangeKind::TELEMETRY;
@@ -691,6 +708,122 @@ void HoymilesDtuComponent::stop_listening_() {
   set_ce_(false);
   set_rx_mode_(false);
   delayMicroseconds(130);
+}
+
+// Passive scan monitor. Runs only while the exchange state machine is IDLE. It listens on our
+// inverter's address (pipe 0) and the HM global Search-ID address (pipe 1), hopping the HM channels,
+// and reports any foreign DTU request it overhears. It never transmits a request; the radio's own
+// auto-ACK is the only emission (see dump_config note). Reuses the exchange RX config (2-byte HW
+// CRC, dynamic payload) so packets decode the same way telemetry does.
+void HoymilesDtuComponent::poll_monitor_(uint32_t now) {
+  if (!monitoring_) {
+    enter_monitor_(now);
+    return;
+  }
+  read_monitor_packets_(now);
+  if (now - monitor_last_hop_ms_ >= MONITOR_CHANNEL_DWELL_MS) {
+    monitor_channel_index_ = (monitor_channel_index_ + 1) % 5;
+    set_channel_(HM_RF_CHANNELS[monitor_channel_index_]);
+    monitor_last_hop_ms_ = now;
+  }
+}
+
+void HoymilesDtuComponent::enter_monitor_(uint32_t now) {
+  command_(NRF_FLUSH_RX);
+  clear_status_(NRF_STATUS_RX_DR | NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
+  if (!inverters_.empty()) {
+    uint8_t inverter_address[5];
+    hm_radio_id_to_address(inverters_.front()->get_radio_id(), inverter_address);
+    write_register_(NRF_REG_RX_ADDR_P0, inverter_address, sizeof(inverter_address));
+  }
+  write_register_(NRF_REG_RX_ADDR_P1, HM_SEARCH_ID_ADDRESS, sizeof(HM_SEARCH_ID_ADDRESS));
+  monitor_channel_index_ = 0;
+  set_channel_(HM_RF_CHANNELS[monitor_channel_index_]);
+  set_rx_mode_(true);
+  set_ce_(true);
+  delayMicroseconds(130);
+  monitor_last_hop_ms_ = now;
+  monitoring_ = true;
+  ESP_LOGD(TAG, "Scan monitor active (inverter + Search-ID address, hopping HM channels)");
+}
+
+void HoymilesDtuComponent::exit_monitor_() {
+  // Mirror stop_listening_. The next exchange reprograms pipe 0/1 and the channel, so nothing else
+  // needs restoring here.
+  set_ce_(false);
+  set_rx_mode_(false);
+  delayMicroseconds(130);
+  monitoring_ = false;
+}
+
+void HoymilesDtuComponent::read_monitor_packets_(uint32_t now) {
+  const uint8_t status = read_register_(NRF_REG_STATUS);
+  if ((status & NRF_STATUS_RX_DR) == 0 && (read_register_(NRF_REG_FIFO_STATUS) & NRF_FIFO_RX_EMPTY) != 0) {
+    return;
+  }
+  const uint64_t inverter_radio_id = inverters_.empty() ? 0 : inverters_.front()->get_radio_id();
+  while ((read_register_(NRF_REG_FIFO_STATUS) & NRF_FIFO_RX_EMPTY) == 0) {
+    uint8_t packet[32];
+    uint8_t len = 0;
+    if (!rx_payload_(packet, &len)) {
+      break;
+    }
+    HmSniffResult sniff;
+    if (hm_classify_sniffed_packet(packet, len, inverter_radio_id, dtu_serial_, &sniff)) {
+      report_scan_(sniff, now);
+    }
+  }
+  clear_status_(NRF_STATUS_RX_DR);
+}
+
+void HoymilesDtuComponent::report_scan_(const HmSniffResult &sniff, uint32_t now) {
+  scan_count_++;
+  const char *kind = "radio activity";
+  switch (sniff.kind) {
+    case HM_SNIFF_SEARCH_ID:
+      kind = "Search-ID scan";
+      break;
+    case HM_SNIFF_COLLECT_INFO:
+      kind = "info probe";
+      break;
+    case HM_SNIFF_FOREIGN_POLL:
+      kind = "foreign poll";
+      break;
+    case HM_SNIFF_FOREIGN_CONTROL:
+      kind = "FOREIGN DevControl";
+      break;
+    case HM_SNIFF_NONE:
+      break;
+  }
+  const char *severity = hm_severity_to_string(sniff.severity);
+  const uint8_t channel = HM_RF_CHANNELS[monitor_channel_index_];
+  ESP_LOGD(TAG, "Scan packet: %s %s opcode=0x%02X dtu=0x%08X ch=%u targets_us=%d", severity, kind, sniff.opcode,
+           sniff.sender_dtu_serial, channel, sniff.targets_our_inverter);
+  // Publish the numeric severity on every classified packet (un-throttled, de-duplicated) so an
+  // escalation to a more serious opcode is surfaced immediately, not hidden behind the text throttle.
+  if (scan_severity_sensor_ != nullptr) {
+    const float value = static_cast<float>(sniff.severity);
+    if (!scan_severity_sensor_->has_state() || scan_severity_sensor_->state != value) {
+      scan_severity_sensor_->publish_state(value);
+    }
+  }
+  // Rate-limit the WARN/ERROR log and the published text so a continuous scan does not flood them;
+  // the running count still climbs so Home Assistant sees each throttled update advance.
+  if (scan_last_report_ms_ != 0 && now - scan_last_report_ms_ < SCAN_REPORT_THROTTLE_MS) {
+    return;
+  }
+  scan_last_report_ms_ = now;
+  char buffer[96];
+  snprintf(buffer, sizeof(buffer), "%s | %s | DTU 0x%08X | ch %u | #%u", severity, kind, sniff.sender_dtu_serial,
+           channel, scan_count_);
+  if (sniff.severity >= HM_SEVERITY_CRITICAL) {
+    ESP_LOGE(TAG, "Radio scan detected: %s", buffer);
+  } else {
+    ESP_LOGW(TAG, "Radio scan detected: %s", buffer);
+  }
+  if (scan_detected_text_sensor_ != nullptr) {
+    scan_detected_text_sensor_->publish_state(buffer);
+  }
 }
 
 void HoymilesDtuComponent::set_channel_(uint8_t channel) { write_register_(NRF_REG_RF_CH, channel); }

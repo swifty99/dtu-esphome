@@ -17,7 +17,7 @@ esp32:
 
 logger:
   # INFO keeps the per-poll "Telemetry ..." summary and exchange/warn lines but drops the noisy
-  # per-fragment RX debug. Set to DEBUG when diagnosing the radio link.
+  # per-fragment RX debug. Set to DEBUG when diagnosing the radio link or watching scan detection.
   level: INFO
   hardware_uart: USB_CDC
 
@@ -48,6 +48,9 @@ hoymiles_dtu:
   # max validated on hardware (100% TX_DS / reliable acquisition). Lower it only if your link is
   # strong and you want less RF/power; the standalone link is sensitive to TX power.
   pa_level: max
+  # Passive, receive-only detection of Search-ID scans / foreign control of this inverter (CCC report).
+  # Monitors between telemetry polls; publishes to the scan_detected text sensor below.
+  scan_detection: true
   inverters:
     - id: hm4
       # Printed inverter serial (packed BCD under the hood). Move to !secret hoymiles_hm4_serial if
@@ -88,6 +91,9 @@ sensor:
         dc_current: {name: "HM4 CH4 DC Current"}
         dc_power: {name: "HM4 CH4 DC Power"}
         yield_today: {name: "HM4 CH4 Yield Today"}
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_severity: {name: "HM4 Scan Severity"}
 
 text_sensor:
   - platform: hoymiles_dtu
@@ -96,5 +102,6 @@ text_sensor:
     last_seen: {name: "HM4 Last Seen"}
   - platform: hoymiles_dtu
     dtu_id: dtu
+    scan_detected: {name: "HM4 Scan Detected"}
     last_rx_payload: {name: "DTU Last RX Payload"}
     last_radio_error: {name: "DTU Last Radio Error"}
