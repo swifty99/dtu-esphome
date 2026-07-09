@@ -11,6 +11,7 @@ from esphome.const import (
     DEVICE_CLASS_REACTIVE_POWER,
     DEVICE_CLASS_TEMPERATURE,
     DEVICE_CLASS_VOLTAGE,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
     STATE_CLASS_TOTAL_INCREASING,
     UNIT_AMPERE,
@@ -24,7 +25,7 @@ from esphome.const import (
     UNIT_WATT_HOURS,
 )
 
-from . import HoymilesDtuInverter
+from . import HoymilesDtuComponent, HoymilesDtuInverter
 from .const import (
     CONF_AC_CURRENT,
     CONF_AC_FREQUENCY,
@@ -34,9 +35,11 @@ from .const import (
     CONF_DC_CURRENT,
     CONF_DC_POWER,
     CONF_DC_VOLTAGE,
+    CONF_DTU_ID,
     CONF_INVERTER_ID,
     CONF_POWER_FACTOR,
     CONF_REACTIVE_POWER,
+    CONF_SCAN_SEVERITY,
     CONF_TEMPERATURE,
     CONF_YIELD_TODAY,
     CONF_YIELD_TOTAL,
@@ -126,6 +129,14 @@ CHANNEL_SENSOR_TYPES = {
     ),
 }
 
+DTU_SENSOR_TYPES = {
+    CONF_SCAN_SEVERITY: sensor.sensor_schema(
+        accuracy_decimals=0,
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        icon="mdi:shield-alert",
+    ),
+}
+
 CHANNEL_SCHEMA = cv.Schema(
     {
         cv.Required(CONF_NUMBER): cv.int_range(min=1, max=4),
@@ -133,30 +144,57 @@ CHANNEL_SCHEMA = cv.Schema(
     }
 )
 
-CONFIG_SCHEMA = cv.Schema(
-    {
-        cv.Required(CONF_INVERTER_ID): cv.use_id(HoymilesDtuInverter),
-        **{cv.Optional(key): schema for key, schema in SENSOR_TYPES.items()},
-        cv.Optional(CONF_CHANNELS): cv.ensure_list(CHANNEL_SCHEMA),
-    }
+
+def validate_sensor_config(config):
+    if (
+        any(key in config for key in SENSOR_TYPES) or CONF_CHANNELS in config
+    ) and CONF_INVERTER_ID not in config:
+        raise cv.Invalid("inverter sensors require inverter_id")
+    if any(key in config for key in DTU_SENSOR_TYPES) and CONF_DTU_ID not in config:
+        raise cv.Invalid("scan_severity requires dtu_id")
+    if CONF_INVERTER_ID not in config and CONF_DTU_ID not in config:
+        raise cv.Invalid("either inverter_id or dtu_id is required")
+    return config
+
+
+CONFIG_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.Optional(CONF_INVERTER_ID): cv.use_id(HoymilesDtuInverter),
+            cv.Optional(CONF_DTU_ID): cv.use_id(HoymilesDtuComponent),
+            **{cv.Optional(key): schema for key, schema in SENSOR_TYPES.items()},
+            cv.Optional(CONF_CHANNELS): cv.ensure_list(CHANNEL_SCHEMA),
+            **{cv.Optional(key): schema for key, schema in DTU_SENSOR_TYPES.items()},
+        }
+    ),
+    validate_sensor_config,
 )
 
 
 async def to_code(config):
-    inverter = await cg.get_variable(config[CONF_INVERTER_ID])
-
-    for key in SENSOR_TYPES:
-        if key not in config:
-            continue
-        sens = await sensor.new_sensor(config[key])
-        setter = getattr(inverter, f"set_{key}_sensor")
-        cg.add(setter(sens))
-
-    for channel_config in config.get(CONF_CHANNELS, []):
-        number = channel_config[CONF_NUMBER]
-        for key in CHANNEL_SENSOR_TYPES:
-            if key not in channel_config:
+    if CONF_INVERTER_ID in config:
+        inverter = await cg.get_variable(config[CONF_INVERTER_ID])
+        for key in SENSOR_TYPES:
+            if key not in config:
                 continue
-            sens = await sensor.new_sensor(channel_config[key])
-            setter_name = f"set_channel_{key}_sensor"
-            cg.add(getattr(inverter, setter_name)(number, sens))
+            sens = await sensor.new_sensor(config[key])
+            setter = getattr(inverter, f"set_{key}_sensor")
+            cg.add(setter(sens))
+
+        for channel_config in config.get(CONF_CHANNELS, []):
+            number = channel_config[CONF_NUMBER]
+            for key in CHANNEL_SENSOR_TYPES:
+                if key not in channel_config:
+                    continue
+                sens = await sensor.new_sensor(channel_config[key])
+                setter_name = f"set_channel_{key}_sensor"
+                cg.add(getattr(inverter, setter_name)(number, sens))
+
+    if CONF_DTU_ID in config:
+        dtu = await cg.get_variable(config[CONF_DTU_ID])
+        for key in DTU_SENSOR_TYPES:
+            if key not in config:
+                continue
+            sens = await sensor.new_sensor(config[key])
+            setter = getattr(dtu, f"set_{key}_sensor")
+            cg.add(setter(sens))

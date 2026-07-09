@@ -795,19 +795,32 @@ void HoymilesDtuComponent::report_scan_(const HmSniffResult &sniff, uint32_t now
     case HM_SNIFF_NONE:
       break;
   }
+  const char *severity = hm_severity_to_string(sniff.severity);
   const uint8_t channel = HM_RF_CHANNELS[monitor_channel_index_];
-  ESP_LOGD(TAG, "Scan packet: %s opcode=0x%02X dtu=0x%08X ch=%u targets_us=%d", kind, sniff.opcode,
+  ESP_LOGD(TAG, "Scan packet: %s %s opcode=0x%02X dtu=0x%08X ch=%u targets_us=%d", severity, kind, sniff.opcode,
            sniff.sender_dtu_serial, channel, sniff.targets_our_inverter);
-  // Rate-limit the WARN log and the published state so a continuous scan does not flood them; the
-  // running count still climbs so Home Assistant sees each throttled update advance.
+  // Publish the numeric severity on every classified packet (un-throttled, de-duplicated) so an
+  // escalation to a more serious opcode is surfaced immediately, not hidden behind the text throttle.
+  if (scan_severity_sensor_ != nullptr) {
+    const float value = static_cast<float>(sniff.severity);
+    if (!scan_severity_sensor_->has_state() || scan_severity_sensor_->state != value) {
+      scan_severity_sensor_->publish_state(value);
+    }
+  }
+  // Rate-limit the WARN/ERROR log and the published text so a continuous scan does not flood them;
+  // the running count still climbs so Home Assistant sees each throttled update advance.
   if (scan_last_report_ms_ != 0 && now - scan_last_report_ms_ < SCAN_REPORT_THROTTLE_MS) {
     return;
   }
   scan_last_report_ms_ = now;
   char buffer[96];
-  snprintf(buffer, sizeof(buffer), "%s | DTU 0x%08X | ch %u | #%u", kind, sniff.sender_dtu_serial, channel,
-           scan_count_);
-  ESP_LOGW(TAG, "Radio scan detected: %s", buffer);
+  snprintf(buffer, sizeof(buffer), "%s | %s | DTU 0x%08X | ch %u | #%u", severity, kind, sniff.sender_dtu_serial,
+           channel, scan_count_);
+  if (sniff.severity >= HM_SEVERITY_CRITICAL) {
+    ESP_LOGE(TAG, "Radio scan detected: %s", buffer);
+  } else {
+    ESP_LOGW(TAG, "Radio scan detected: %s", buffer);
+  }
   if (scan_detected_text_sensor_ != nullptr) {
     scan_detected_text_sensor_->publish_state(buffer);
   }

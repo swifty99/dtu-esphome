@@ -110,8 +110,19 @@ enum HmSniffKind : uint8_t {
   HM_SNIFF_FOREIGN_CONTROL,  // 0x51 DevControl aimed at our inverter by a foreign DTU (most serious)
 };
 
+// Severity of a detected foreign request on a 0-4 scale. Published verbatim by the scan_severity
+// sensor so a Home Assistant automation can threshold on it (e.g. >= HM_SEVERITY_HIGH).
+enum HmSeverity : uint8_t {
+  HM_SEVERITY_NONE = 0,
+  HM_SEVERITY_LOW = 1,
+  HM_SEVERITY_MEDIUM = 2,    // reconnaissance: Search-ID scan or info probe
+  HM_SEVERITY_HIGH = 3,      // a foreign DTU is actively polling our inverter
+  HM_SEVERITY_CRITICAL = 4,  // a foreign DTU is sending control commands to our inverter
+};
+
 struct HmSniffResult {
   HmSniffKind kind{HM_SNIFF_NONE};
+  HmSeverity severity{HM_SEVERITY_NONE};
   uint8_t opcode{0};
   uint32_t sender_dtu_serial{0};  // the attacker's DTU serial embedded in the request (0 if unknown)
   bool targets_our_inverter{false};
@@ -123,6 +134,11 @@ struct HmSniffResult {
 // recognised foreign request.
 bool hm_classify_sniffed_packet(const uint8_t *packet, uint8_t len, uint64_t our_inverter_radio_id,
                                 uint32_t our_dtu_serial, HmSniffResult *out);
+
+// Map a sniff kind to its severity, and a severity to a short upper-case label
+// ("MEDIUM"/"HIGH"/"CRITICAL"). Shared by the classifier and the report/log formatting.
+HmSeverity hm_sniff_severity(HmSniffKind kind);
+const char *hm_severity_to_string(HmSeverity severity);
 
 }  // namespace hoymiles_dtu
 }  // namespace esphome

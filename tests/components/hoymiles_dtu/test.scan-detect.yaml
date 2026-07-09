@@ -45,6 +45,12 @@ hoymiles_dtu:
       serial: "114180000000"
       model: hm_1500
 
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_severity:
+      name: "DTU Scan Severity"
+
 text_sensor:
   - platform: hoymiles_dtu
     dtu_id: dtu

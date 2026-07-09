@@ -102,6 +102,7 @@ class HoymilesDtuComponent : public PollingComponent,
   void set_pa_level(HmPaLevel pa_level) { pa_level_ = pa_level; }
   void set_scan_detection(bool enabled) { scan_detection_ = enabled; }
   void set_scan_detected_text_sensor(text_sensor::TextSensor *sensor) { scan_detected_text_sensor_ = sensor; }
+  void set_scan_severity_sensor(sensor::Sensor *sensor) { scan_severity_sensor_ = sensor; }
   void set_dtu_serial(uint32_t dtu_serial) {
     dtu_serial_ = dtu_serial;
     dtu_serial_configured_ = true;
@@ -222,6 +223,7 @@ class HoymilesDtuComponent : public PollingComponent,
   text_sensor::TextSensor *last_rx_payload_text_sensor_{nullptr};
   text_sensor::TextSensor *last_radio_error_text_sensor_{nullptr};
   text_sensor::TextSensor *scan_detected_text_sensor_{nullptr};
+  sensor::Sensor *scan_severity_sensor_{nullptr};
 };
 
 template <typename... Ts>

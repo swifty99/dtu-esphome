@@ -227,23 +227,54 @@ inverter's own address, hopping the HM channels. Anything it overhears that is a
 foreign DTU **request** is reported to the `scan_detected` text sensor:
 
 - **`Search-ID scan`** — a broadcast serial-enumeration scan (opcode `0x02`).
+  Severity **MEDIUM**.
 - **`info probe`** — an RF info request that also leaks the serial (`0x06`).
+  Severity **MEDIUM**.
 - **`foreign poll`** — a telemetry request aimed at *your* inverter by another
-  DTU (`0x15`).
+  DTU (`0x15`). Severity **HIGH**.
 - **`FOREIGN DevControl`** — a control command (power limit / on-off) aimed at
-  *your* inverter by another DTU (`0x51`). This is the serious one.
+  *your* inverter by another DTU (`0x51`). Severity **CRITICAL** — this is the
+  serious one.
 
-Each report reads like `Search-ID scan | DTU 0x80187264 | ch 40 | #7`, where the
-DTU value is the attacker's own DTU serial (embedded in every request) and `#`
-is a running count. Wire it to a Home Assistant automation to get notified:
+Each report reads like `CRITICAL | FOREIGN DevControl | DTU 0x80187264 | ch 40 | #7`,
+where the leading word is the severity (below), the `DTU` value is the attacker's
+own DTU serial (embedded in every request), and `#` is a running count.
 
 ```yaml
 text_sensor:
   - platform: hoymiles_dtu
     dtu_id: dtu
     scan_detected: {name: "DTU Scan Detected", id: dtu_scan}
+```
 
-# automation (Home Assistant): notify on any state change of the scan sensor
+### Severity
+
+Every detection carries a severity, so an automation can react to *how bad* the
+traffic is instead of parsing the text. It rises with how far an attacker has
+progressed against your specific inverter. The underlying unauthenticated-protocol
+flaw these map onto is described in the CCC report [*"Wireless Interface
+Vulnerabilities of Hoymiles Microinverters"*](https://www.ccc.de/system/uploads/382/original/hoymiles_dtu_vuln.pdf).
+
+| Severity | Value | Kinds | Meaning |
+|----------|-------|-------|---------|
+| MEDIUM   | `2`   | `Search-ID scan`, `info probe` | reconnaissance — enumerating or probing serials nearby |
+| HIGH     | `3`   | `foreign poll` | a foreign DTU is actively **reading** your inverter |
+| CRITICAL | `4`   | `FOREIGN DevControl` | a foreign DTU is **commanding** your inverter (power limit / on-off) |
+
+The severity prefixes the `scan_detected` text, and is also published as a number
+by the optional hub-level **`scan_severity`** sensor — the value to threshold on in
+automations. It updates on every classified packet (not throttled), so an
+escalation is never hidden behind the text-report rate limit, and a `CRITICAL` also
+logs at `ERROR`.
+
+```yaml
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_severity: {name: "DTU Scan Severity", id: dtu_scan_severity}
+
+# automation (Home Assistant): alert when severity reaches HIGH (3) or above,
+# e.g. trigger on numeric_state above 2 of sensor.dtu_scan_severity
 ```
 
 This is **detection only — there are no countermeasures.** It never transmits a
@@ -262,9 +293,10 @@ request and cannot control the inverter. Honest limitations:
   it is not a silent sniffer.
 - **Targeted-request detection covers the first configured inverter;**
   Search-ID broadcast detection is inverter-independent.
-- **Not verified on hardware in this repo.** The detector is receive-only, so
-  it cannot cause harm, but whether it catches a given scanner in your RF
-  environment should be confirmed on your own bench.
+- **Validated on hardware, but RF-dependent.** Confirmed on-air against a real
+  AhoyDTU — both `foreign poll` and `FOREIGN DevControl` were detected. It is
+  receive-only and cannot cause harm, but whether it catches a *given* scanner in
+  *your* RF environment depends on range and timing, so confirm on your own bench.
 
 ## How the HM RF protocol works
 

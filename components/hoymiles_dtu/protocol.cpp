@@ -391,8 +391,40 @@ bool hm_classify_sniffed_packet(const uint8_t *packet, uint8_t len, uint64_t our
   if (our_dtu_serial != 0 && result.sender_dtu_serial == our_dtu_serial) {
     return false;
   }
+  result.severity = hm_sniff_severity(result.kind);
   *out = result;
   return true;
+}
+
+HmSeverity hm_sniff_severity(HmSniffKind kind) {
+  switch (kind) {
+    case HM_SNIFF_SEARCH_ID:
+    case HM_SNIFF_COLLECT_INFO:
+      return HM_SEVERITY_MEDIUM;
+    case HM_SNIFF_FOREIGN_POLL:
+      return HM_SEVERITY_HIGH;
+    case HM_SNIFF_FOREIGN_CONTROL:
+      return HM_SEVERITY_CRITICAL;
+    case HM_SNIFF_NONE:
+      break;
+  }
+  return HM_SEVERITY_NONE;
+}
+
+const char *hm_severity_to_string(HmSeverity severity) {
+  switch (severity) {
+    case HM_SEVERITY_LOW:
+      return "LOW";
+    case HM_SEVERITY_MEDIUM:
+      return "MEDIUM";
+    case HM_SEVERITY_HIGH:
+      return "HIGH";
+    case HM_SEVERITY_CRITICAL:
+      return "CRITICAL";
+    case HM_SEVERITY_NONE:
+      break;
+  }
+  return "NONE";
 }
 
 const char *hm_status_to_string(HmStatus status) {

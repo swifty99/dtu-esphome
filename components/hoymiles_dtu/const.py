@@ -11,6 +11,7 @@ CONF_PERCENT = "percent"
 CONF_PERSISTENT = "persistent"
 CONF_SCAN_DETECTED = "scan_detected"
 CONF_SCAN_DETECTION = "scan_detection"
+CONF_SCAN_SEVERITY = "scan_severity"
 CONF_SERIAL = "serial"
 
 CONF_AC_CURRENT = "ac_current"

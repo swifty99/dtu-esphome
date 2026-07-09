@@ -344,11 +344,13 @@ static void test_classify_sniffed() {
   const uint8_t search_id[] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x64, 0x00, 0x8C};
   CHECK(hm_classify_sniffed_packet(search_id, sizeof(search_id), our_inv, our_dtu, &r));
   CHECK(r.kind == HM_SNIFF_SEARCH_ID && r.sender_dtu_serial == 0x80187264UL);
+  CHECK(r.severity == HM_SEVERITY_MEDIUM);
 
   // Real 0x06 collect-info probe (report sec 4.3), serial one byte later at 0x80187265.
   const uint8_t collect[] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x18, 0x72, 0x65, 0x00, 0x89};
   CHECK(hm_classify_sniffed_packet(collect, sizeof(collect), our_inv, our_dtu, &r));
   CHECK(r.kind == HM_SNIFF_COLLECT_INFO && r.sender_dtu_serial == 0x80187265UL);
+  CHECK(r.severity == HM_SEVERITY_MEDIUM);
 
   // A foreign DevControl aimed at OUR inverter -> flagged as the most serious case.
   uint8_t ctrl[32];
@@ -356,6 +358,14 @@ static void test_classify_sniffed() {
   CHECK(clen == 19);
   CHECK(hm_classify_sniffed_packet(ctrl, clen, our_inv, our_dtu, &r));
   CHECK(r.kind == HM_SNIFF_FOREIGN_CONTROL && r.targets_our_inverter && r.sender_dtu_serial == 0x11223344UL);
+  CHECK(r.severity == HM_SEVERITY_CRITICAL);
+
+  // A foreign telemetry poll (0x15) aimed at OUR inverter -> high severity.
+  uint8_t poll[32];
+  const uint8_t plen2 = hm_build_realtime_request(our_inv, 0x11223344UL, 0x64656667UL, poll, sizeof(poll));
+  CHECK(plen2 == 27);
+  CHECK(hm_classify_sniffed_packet(poll, plen2, our_inv, our_dtu, &r));
+  CHECK(r.kind == HM_SNIFF_FOREIGN_POLL && r.targets_our_inverter && r.severity == HM_SEVERITY_HIGH);
 
   // Our own DevControl (sender == our DTU serial) is not an intrusion.
   clen = hm_build_power_limit_request(our_inv, our_dtu, 50, true, ctrl, sizeof(ctrl));
@@ -377,6 +387,14 @@ static void test_classify_sniffed() {
   resp[10] = hm_crc8(resp, 10);
   CHECK(!hm_classify_sniffed_packet(resp, sizeof(resp), our_inv, our_dtu, &r));
   CHECK(!hm_classify_sniffed_packet(search_id, 8, our_inv, our_dtu, &r));
+
+  // Direct severity mapping + labels.
+  CHECK(hm_sniff_severity(HM_SNIFF_SEARCH_ID) == HM_SEVERITY_MEDIUM);
+  CHECK(hm_sniff_severity(HM_SNIFF_FOREIGN_POLL) == HM_SEVERITY_HIGH);
+  CHECK(hm_sniff_severity(HM_SNIFF_FOREIGN_CONTROL) == HM_SEVERITY_CRITICAL);
+  CHECK(hm_sniff_severity(HM_SNIFF_NONE) == HM_SEVERITY_NONE);
+  CHECK(strcmp(hm_severity_to_string(HM_SEVERITY_CRITICAL), "CRITICAL") == 0);
+  CHECK(strcmp(hm_severity_to_string(HM_SEVERITY_HIGH), "HIGH") == 0);
 }
 
 int main() {

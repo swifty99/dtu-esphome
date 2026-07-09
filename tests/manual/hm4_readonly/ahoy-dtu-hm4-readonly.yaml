@@ -91,6 +91,9 @@ sensor:
         dc_current: {name: "HM4 CH4 DC Current"}
         dc_power: {name: "HM4 CH4 DC Power"}
         yield_today: {name: "HM4 CH4 Yield Today"}
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_severity: {name: "HM4 Scan Severity"}
 
 text_sensor:
   - platform: hoymiles_dtu
