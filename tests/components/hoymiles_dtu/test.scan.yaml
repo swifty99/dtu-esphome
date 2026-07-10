@@ -1,0 +1,68 @@
+substitutions:
+  board: esp32dev
+  framework: arduino
+  sck_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  cs_pin: GPIO5
+  ce_pin: GPIO4
+  irq_pin: GPIO16
+
+esphome:
+  name: hoymiles-dtu-scan
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+spi:
+  id: dtu_spi
+  clk_pin: ${sck_pin}
+  mosi_pin: ${mosi_pin}
+  miso_pin: ${miso_pin}
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: ${cs_pin}
+  ce_pin: ${ce_pin}
+  irq_pin: ${irq_pin}
+  update_interval: 30s
+  pa_level: low
+  inverters:
+    - id: hm4
+      serial: "114180000000"
+      model: hm_1500
+
+# Active over-the-air discovery scan — on-demand only (it transmits), never on a timer.
+button:
+  - platform: template
+    name: "Scan for inverters"
+    on_press:
+      - hoymiles_dtu.scan_inverters:
+          id: dtu
+          duration: 20s
+          commands: [search_id, collect_info]
+
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_found_count:
+      name: "DTU Scan Found"
+
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_result:
+      name: "DTU Scan Result"
+    last_radio_error:
+      name: "DTU Last Radio Error"

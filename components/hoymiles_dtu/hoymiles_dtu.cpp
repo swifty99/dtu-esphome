@@ -61,6 +61,13 @@ static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
 // bursts overlap our listen window; and rate-limit reports so a continuous scan does not spam.
 static constexpr uint32_t MONITOR_CHANNEL_DWELL_MS = 20;
 static constexpr uint32_t SCAN_REPORT_THROTTLE_MS = 2000;
+// Active scanner tunables. Each probe transmits one discovery command on one channel, then listens
+// SCAN_RX_WINDOW_MS for replies on the DTU address, sweeping the HM channels (the reply channel
+// offset for a broadcast discovery is not documented, so we sweep rather than park). Defaults chosen
+// so one full round of 5 channels x up-to-2 commands takes ~1s; a scan runs for its whole duration.
+static constexpr uint32_t SCAN_RX_WINDOW_MS = 120;
+static constexpr uint32_t SCAN_RX_CHANNEL_DWELL_MS = 6;
+static constexpr uint32_t SCAN_DEFAULT_DURATION_MS = 20000;
 
 void HoymilesDtuInverter::set_serial(uint64_t serial) {
   serial_ = serial;
@@ -200,6 +207,16 @@ void HoymilesDtuComponent::setup() {
     return;
   }
   ESP_LOGCONFIG(TAG, "nRF24 radio ready, DTU serial 0x%08X", dtu_serial_);
+
+  if (scan_on_boot_) {
+    // Fire one bounded discovery scan a short delay after boot (let wifi/time and the first poll
+    // settle). set_timeout runs the callback exactly once, so this can never become a recurring
+    // scan — the only ways to scan are this boot one-shot, the scan_inverters action, and a button.
+    this->set_timeout("scan_on_boot", scan_on_boot_delay_ms_, [this]() {
+      ESP_LOGI(TAG, "scan_on_boot: starting one-shot discovery scan");
+      this->scan_inverters(scan_on_boot_duration_ms_, scan_on_boot_commands_);
+    });
+  }
 }
 
 void HoymilesDtuComponent::update() {
@@ -233,6 +250,12 @@ void HoymilesDtuComponent::loop() {
         }
         power_limit_pending_ = false;
         start_power_limit_request_(now);
+      } else if (scan_pending_) {
+        if (monitoring_) {
+          exit_monitor_();
+        }
+        scan_pending_ = false;
+        start_scan_(now);
       } else if (scan_detection_) {
         poll_monitor_(now);
       }
@@ -262,6 +285,14 @@ void HoymilesDtuComponent::dump_config() {
   // beyond what the (already unauthenticated) protocol exposes, but it is not perfectly stealthy.
   ESP_LOGCONFIG(TAG, "  Scan detection: %s",
                 scan_detection_ ? "enabled (passive; listens on inverter + Search-ID address)" : "disabled");
+  // The active scanner is available on-demand via the scan_inverters action (it transmits discovery
+  // requests, so it never runs on a timer). Reported here only as an availability note.
+  if (scan_on_boot_) {
+    ESP_LOGCONFIG(TAG, "  Active scan: on-demand via scan_inverters action; one-shot on boot (+%ums, %ums)",
+                  scan_on_boot_delay_ms_, scan_on_boot_duration_ms_);
+  } else {
+    ESP_LOGCONFIG(TAG, "  Active scan: on-demand via scan_inverters action");
+  }
   for (auto *inverter : inverters_) {
     ESP_LOGCONFIG(TAG, "  Inverter serial=%012llX model=%s status=%s last_seen=%us error=%s", inverter->get_serial(),
                   hm_model_to_string(inverter->get_model()), hm_status_to_string(inverter->get_status()),
@@ -281,6 +312,20 @@ void HoymilesDtuComponent::radio_set_power_limit(uint16_t percent, bool persiste
   power_limit_percent_ = percent;
   power_limit_persistent_ = persistent;
   power_limit_pending_ = true;
+}
+
+void HoymilesDtuComponent::scan_inverters(uint32_t duration_ms, uint8_t commands) {
+  if (!radio_ok_) {
+    publish_radio_error_("radio not ready");
+    return;
+  }
+  if (scan_pending_ || exchange_kind_ == ExchangeKind::SCAN) {
+    ESP_LOGW(TAG, "Scan already requested or running; ignoring");
+    return;
+  }
+  scan_duration_ms_ = duration_ms == 0 ? SCAN_DEFAULT_DURATION_MS : duration_ms;
+  scan_commands_ = commands == 0 ? (HM_SCAN_CMD_SEARCH_ID | HM_SCAN_CMD_COLLECT_INFO) : commands;
+  scan_pending_ = true;
 }
 
 bool HoymilesDtuComponent::setup_radio_() {
@@ -452,6 +497,10 @@ void HoymilesDtuComponent::transmit_request_(uint32_t now) {
 }
 
 void HoymilesDtuComponent::poll_tx_(uint32_t now) {
+  if (exchange_kind_ == ExchangeKind::SCAN) {
+    poll_scan_tx_(now);
+    return;
+  }
   const uint8_t status = read_register_(NRF_REG_STATUS);
   if ((status & NRF_STATUS_TX_DS) != 0) {
     // ACK from the inverter: it received the request and will stream data frames. Listen now.
@@ -483,6 +532,10 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
 }
 
 void HoymilesDtuComponent::poll_rx_(uint32_t now) {
+  if (exchange_kind_ == ExchangeKind::SCAN) {
+    poll_scan_rx_(now);
+    return;
+  }
   read_available_packets_();
 
   if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
@@ -824,6 +877,188 @@ void HoymilesDtuComponent::report_scan_(const HmSniffResult &sniff, uint32_t now
   if (scan_detected_text_sensor_ != nullptr) {
     scan_detected_text_sensor_->publish_state(buffer);
   }
+}
+
+// Active scanner. Broadcasts the CCC report's discovery requests (Search-ID 0x02 / collect-info 0x06)
+// to the HM global address and reports every inverter that answers. Unlike the passive monitor this
+// transmits, so it is user-initiated only (the scan_inverters action), disabled by default, and
+// bounded in duration. It only reads serials — it sends no on/off, power-limit, or firmware command.
+void HoymilesDtuComponent::start_scan_(uint32_t now) {
+  exchange_kind_ = ExchangeKind::SCAN;
+  scan_started_ms_ = now;
+  scan_found_count_ = 0;
+  scan_probe_channel_index_ = 0;
+  // Start with Search-ID when it is enabled, otherwise the other command; advance_scan_probe_ then
+  // alternates only between the enabled commands.
+  scan_probe_collect_info_ = (scan_commands_ & HM_SCAN_CMD_SEARCH_ID) == 0;
+  begin_exchange_();
+  // The TX address and the pipe-0 (auto-ACK) address are the HM global Search-ID address for the
+  // whole scan; only the channel and payload change per probe. Replies come back on pipe 1 (the DTU
+  // address), programmed later by start_listening_.
+  write_register_(NRF_REG_TX_ADDR, HM_SEARCH_ID_ADDRESS, sizeof(HM_SEARCH_ID_ADDRESS));
+  write_register_(NRF_REG_RX_ADDR_P0, HM_SEARCH_ID_ADDRESS, sizeof(HM_SEARCH_ID_ADDRESS));
+  ESP_LOGI(TAG, "Scan started: duration=%ums commands=%s%s dtu=0x%08X", scan_duration_ms_,
+           (scan_commands_ & HM_SCAN_CMD_SEARCH_ID) ? "search-id " : "",
+           (scan_commands_ & HM_SCAN_CMD_COLLECT_INFO) ? "collect-info" : "", dtu_serial_);
+  transmit_scan_probe_(now);
+}
+
+void HoymilesDtuComponent::transmit_scan_probe_(uint32_t now) {
+  request_started_ms_ = now;
+  stop_listening_();
+  set_channel_(HM_RF_CHANNELS[scan_probe_channel_index_]);
+  if (scan_probe_collect_info_) {
+    request_len_ = hm_build_collect_info_request(dtu_serial_, request_, sizeof(request_));
+  } else {
+    request_len_ = hm_build_search_id_request(dtu_serial_, request_, sizeof(request_));
+  }
+  if (request_len_ == 0) {
+    finish_scan_(now);
+    return;
+  }
+  ESP_LOGD(TAG, "Scan probe: %s ch=%u data=%s", scan_probe_collect_info_ ? "collect-info" : "search-id",
+           HM_RF_CHANNELS[scan_probe_channel_index_], format_hex_pretty(request_, request_len_).c_str());
+  if (tx_payload_(request_, request_len_)) {
+    request_state_ = RequestState::WAIT_TX_IRQ;
+  } else {
+    begin_scan_rx_window_(now);
+  }
+}
+
+void HoymilesDtuComponent::poll_scan_tx_(uint32_t now) {
+  const uint8_t status = read_register_(NRF_REG_STATUS);
+  const bool tx_ds = (status & NRF_STATUS_TX_DS) != 0;
+  const bool max_rt = (status & NRF_STATUS_MAX_RT) != 0;
+  // A TX_DS here means an inverter in range auto-ACKed the discovery request (report footnote 17).
+  // Whether or not one did, listen for a reply: the serial comes back as a separate packet, and ACK
+  // timing on a broadcast is not something to rely on.
+  if (tx_ds || max_rt || now - request_started_ms_ > TX_TIMEOUT_MS) {
+    set_ce_(false);
+    // A TX_DS on a broadcast probe means an inverter in range ACKed it (report footnote 17) and a
+    // serial reply should follow; MAX_RT/timeout means nobody answered on this channel. Logged so a
+    // bench run can tell "the inverter hears the broadcast" from "it ignores it".
+    ESP_LOGD(TAG, "Scan probe TX %s ch=%u", tx_ds ? "ACK(TX_DS)" : (max_rt ? "MAX_RT" : "timeout"),
+             HM_RF_CHANNELS[scan_probe_channel_index_]);
+    clear_status_(NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
+    command_(NRF_FLUSH_TX);
+    begin_scan_rx_window_(now);
+  }
+}
+
+void HoymilesDtuComponent::begin_scan_rx_window_(uint32_t now) {
+  scan_rx_started_ms_ = now;
+  scan_rx_last_hop_ms_ = now;
+  // HM replies land rxOffset=+3 channels from the request channel — the same offset telemetry and
+  // devcontrol rely on. Start there so a single fast discovery reply is caught immediately, then keep
+  // sweeping (the reply channel for a broadcast discovery is not separately documented).
+  scan_rx_channel_index_ = (scan_probe_channel_index_ + 3) % 5;
+  start_listening_(HM_RF_CHANNELS[scan_rx_channel_index_]);  // programs pipe 1 = DTU address
+  request_state_ = RequestState::RX_ACTIVE;
+}
+
+void HoymilesDtuComponent::poll_scan_rx_(uint32_t now) {
+  while ((read_register_(NRF_REG_FIFO_STATUS) & NRF_FIFO_RX_EMPTY) == 0) {
+    uint8_t packet[32];
+    uint8_t len = 0;
+    if (!rx_payload_(packet, &len)) {
+      break;
+    }
+    // Log every raw reply during a scan (even ones that do not parse) so a bench test can tell "the
+    // inverter answered but we misparsed" from "nothing came back at all".
+    ESP_LOGD(TAG, "Scan RX ch=%u len=%u data=%s", HM_RF_CHANNELS[scan_rx_channel_index_], len,
+             format_hex_pretty(packet, len).c_str());
+    handle_scan_packet_(packet, len, now);
+  }
+  clear_status_(NRF_STATUS_RX_DR);
+
+  if (now - scan_rx_started_ms_ >= SCAN_RX_WINDOW_MS) {
+    advance_scan_probe_(now);
+    return;
+  }
+  if (now - scan_rx_last_hop_ms_ >= SCAN_RX_CHANNEL_DWELL_MS) {
+    scan_rx_channel_index_ = (scan_rx_channel_index_ + 1) % 5;
+    set_channel_(HM_RF_CHANNELS[scan_rx_channel_index_]);
+    scan_rx_last_hop_ms_ = now;
+  }
+}
+
+void HoymilesDtuComponent::handle_scan_packet_(const uint8_t *packet, uint8_t len, uint32_t now) {
+  HmDiscoveredInverter inverter;
+  if (hm_parse_search_id_response(packet, len, &inverter)) {
+    // The reply echoes a serial at [5..8]. Some firmwares echo the DTU serial we transmitted (the
+    // CCC report's HMS-600 capture); the live HM-1200 echoes its own serial there instead. Accept
+    // either — the 0x82 opcode and the trailing CRC8 (both verified by hm_parse_search_id_response)
+    // already authenticate the reply as a genuine answer to our scan. Only drop a reply whose echo
+    // is neither our DTU serial nor the inverter's own serial, which would mean it was not ours.
+    if (dtu_serial_ == 0 || inverter.responder_dtu_serial == dtu_serial_ ||
+        inverter.responder_dtu_serial == inverter.serial_suffix) {
+      report_discovered_(inverter, true, now);
+    }
+    return;
+  }
+  if (hm_parse_collect_info_response(packet, len, &inverter)) {
+    report_discovered_(inverter, false, now);
+  }
+}
+
+void HoymilesDtuComponent::report_discovered_(const HmDiscoveredInverter &inverter, bool via_search_id, uint32_t now) {
+  for (uint8_t i = 0; i < scan_found_count_; i++) {
+    if (scan_seen_serials_[i] == inverter.serial_suffix) {
+      return;  // already reported this scan
+    }
+  }
+  if (scan_found_count_ >= SCAN_MAX_RESULTS) {
+    return;
+  }
+  scan_seen_serials_[scan_found_count_++] = inverter.serial_suffix;
+  const uint8_t channel = HM_RF_CHANNELS[scan_probe_channel_index_];
+  char buffer[96];
+  if (via_search_id) {
+    snprintf(buffer, sizeof(buffer), "serial ...%08X | PID 0x%04X | via search-id | ch %u | #%u",
+             inverter.serial_suffix, inverter.pid, channel, scan_found_count_);
+  } else {
+    snprintf(buffer, sizeof(buffer), "serial ...%08X | PID - | via collect-info | ch %u | #%u", inverter.serial_suffix,
+             channel, scan_found_count_);
+  }
+  ESP_LOGI(TAG, "Scan found: %s", buffer);
+  if (scan_result_text_sensor_ != nullptr) {
+    scan_result_text_sensor_->publish_state(buffer);
+  }
+  if (scan_found_count_sensor_ != nullptr) {
+    scan_found_count_sensor_->publish_state(static_cast<float>(scan_found_count_));
+  }
+}
+
+void HoymilesDtuComponent::advance_scan_probe_(uint32_t now) {
+  const bool has_search_id = (scan_commands_ & HM_SCAN_CMD_SEARCH_ID) != 0;
+  const bool has_collect_info = (scan_commands_ & HM_SCAN_CMD_COLLECT_INFO) != 0;
+  if (has_search_id && has_collect_info) {
+    scan_probe_collect_info_ = !scan_probe_collect_info_;
+    if (!scan_probe_collect_info_) {  // completed both commands on this channel
+      scan_probe_channel_index_ = (scan_probe_channel_index_ + 1) % 5;
+    }
+  } else {
+    scan_probe_channel_index_ = (scan_probe_channel_index_ + 1) % 5;
+  }
+  if (now - scan_started_ms_ >= scan_duration_ms_) {
+    finish_scan_(now);
+    return;
+  }
+  transmit_scan_probe_(now);
+}
+
+void HoymilesDtuComponent::finish_scan_(uint32_t now) {
+  stop_listening_();
+  ESP_LOGI(TAG, "Scan complete: %u inverter(s) found in %ums", scan_found_count_, now - scan_started_ms_);
+  if (scan_found_count_sensor_ != nullptr) {
+    scan_found_count_sensor_->publish_state(static_cast<float>(scan_found_count_));
+  }
+  if (scan_result_text_sensor_ != nullptr && scan_found_count_ == 0) {
+    scan_result_text_sensor_->publish_state("no inverters found");
+  }
+  exchange_kind_ = ExchangeKind::TELEMETRY;
+  request_state_ = RequestState::IDLE;
+  end_exchange_();
 }
 
 void HoymilesDtuComponent::set_channel_(uint8_t channel) { write_register_(NRF_REG_RF_CH, channel); }

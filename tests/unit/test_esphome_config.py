@@ -12,6 +12,8 @@ CONFIGS = [
     "test.hm4-readonly.yaml",
     "test.multi-model.yaml",
     "test.scan-detect.yaml",
+    "test.scan.yaml",
+    "test.scan-on-boot.yaml",
 ]
 
 

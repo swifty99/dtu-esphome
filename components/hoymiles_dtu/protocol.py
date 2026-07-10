@@ -61,3 +61,26 @@ def build_realtime_request(
     buffer[length + 1] = crc_16 & 0xFF
     buffer[length + 2] = crc8(buffer[: length + 2])
     return bytes(buffer)
+
+
+def build_search_id_request(dtu_serial: int) -> bytes:
+    # "Search ID" (Gongfa, 0x02) broadcast discovery — see hm_build_search_id_request
+    # in protocol.cpp and the CCC report section 4. [1..4] target is left zero for a
+    # broadcast; [5..8] is our DTU address, big-endian. Discovery requests carry only
+    # the app-layer CRC8, no CRC16.
+    buffer = bytearray(11)
+    buffer[0] = 0x02
+    buffer[5:9] = dtu_serial.to_bytes(4, "big")
+    buffer[10] = crc8(buffer[:10])
+    return bytes(buffer)
+
+
+def build_collect_info_request(dtu_serial: int) -> bytes:
+    # "Collect RF hw/sw info" (0x06) discovery probe — the Search-ID fallback that
+    # leaks the serial even while the inverter is bound to a DTU. One wildcard byte
+    # longer than Search-ID, so the DTU address sits at [6..9].
+    buffer = bytearray(12)
+    buffer[0] = 0x06
+    buffer[6:10] = dtu_serial.to_bytes(4, "big")
+    buffer[11] = crc8(buffer[:11])
+    return bytes(buffer)

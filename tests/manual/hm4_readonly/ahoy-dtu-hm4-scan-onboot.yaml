@@ -1,0 +1,70 @@
+substitutions:
+  plug_name: ahoy-dtu-hm4-readonly
+  device_name: ${plug_name}
+
+packages:
+  device_base: !include ../nrf24_probe/packages/device_base_debug.yaml
+  default_diag: !include ../nrf24_probe/packages/default_diag.yaml
+
+esphome:
+  name: ${plug_name}
+  friendly_name: Ahoy DTU HM4 Scan (on-boot)
+  # HIL variant that drives discovery through the scan_on_boot: hub option (not an on_boot
+  # automation). Same unbound window as ahoy-dtu-hm4-scan-unbound.yaml: update_interval 60min so the
+  # inverter unbinds ~15 min after the previous firmware's last poll, and scan_on_boot fires one scan
+  # at 18 min (past that timeout). Daytime only — the inverter must be powered to answer Search-ID.
+
+esp32:
+  board: esp32-s2-saola-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_CDC
+
+time:
+  - platform: sntp
+    id: dtu_time
+
+spi:
+  id: dtu_spi
+  clk_pin: GPIO5
+  mosi_pin: GPIO11
+  miso_pin: GPIO16
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: GPIO9
+  ce_pin: GPIO12
+  irq_pin: GPIO7
+  update_interval: 60min
+  pa_level: max
+  scan_detection: false
+  scan_on_boot:
+    delay: 18min
+    duration: 40s
+    commands: [search_id, collect_info]
+  inverters:
+    - id: hm4
+      serial: "116182806989"
+      model: hm_1200
+
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_found_count: {name: "HM4 Scan Found"}
+
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_result: {name: "HM4 Scan Result"}
+    last_rx_payload: {name: "DTU Last RX Payload"}
+    last_radio_error: {name: "DTU Last Radio Error"}

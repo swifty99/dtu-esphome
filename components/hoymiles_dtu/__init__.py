@@ -2,10 +2,12 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation, pins
 from esphome.components import spi
-from esphome.const import CONF_ID
+from esphome.const import CONF_DELAY, CONF_ID
 
 from .const import (
     CONF_CE_PIN,
+    CONF_COMMANDS,
+    CONF_DURATION,
     CONF_INVERTERS,
     CONF_IRQ_PIN,
     CONF_MODEL,
@@ -13,6 +15,7 @@ from .const import (
     CONF_PERCENT,
     CONF_PERSISTENT,
     CONF_SCAN_DETECTION,
+    CONF_SCAN_ON_BOOT,
     CONF_SERIAL,
 )
 from .protocol import parse_serial_bcd
@@ -31,6 +34,42 @@ HmPaLevel = hoymiles_dtu_ns.enum("HmPaLevel")
 RadioSetPowerLimitAction = hoymiles_dtu_ns.class_(
     "RadioSetPowerLimitAction", automation.Action
 )
+ScanInvertersAction = hoymiles_dtu_ns.class_("ScanInvertersAction", automation.Action)
+
+# Discovery-command bitmask, kept in sync with HM_SCAN_CMD_* in hoymiles_dtu.h.
+SCAN_COMMAND_BITS = {
+    "search_id": 0x01,
+    "collect_info": 0x02,
+}
+
+# `commands:` list shared by the scan_inverters action and scan_on_boot (>=1 opcode).
+SCAN_COMMANDS_SCHEMA = cv.All(
+    cv.ensure_list(cv.one_of(*SCAN_COMMAND_BITS, lower=True)), cv.Length(min=1)
+)
+
+# A single bounded discovery scan fired once, a short delay after boot. It is
+# deliberately a one-shot, never a recurring timer: the scanner transmits, so it only
+# runs on an explicit trigger (this boot one-shot, the scan_inverters action, or a
+# button). `scan_on_boot: true` enables it with defaults; a mapping overrides the
+# delay/duration/commands.
+SCAN_ON_BOOT_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_DELAY, default="45s"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_DURATION, default="20s"): cv.positive_time_period_milliseconds,
+        cv.Optional(
+            CONF_COMMANDS, default=["search_id", "collect_info"]
+        ): SCAN_COMMANDS_SCHEMA,
+    }
+)
+
+
+def _scan_on_boot(value):
+    # Accept a bare boolean (enable/disable with defaults) or a full mapping. Normalise
+    # to either None (disabled) or a validated dict so to_code has one shape to handle.
+    if isinstance(value, dict):
+        return SCAN_ON_BOOT_SCHEMA(value)
+    return SCAN_ON_BOOT_SCHEMA({}) if cv.boolean(value) else None
+
 
 # Same HM families Ahoy supports over nRF24, keyed by DC-input count:
 # 1-channel HM-300/350/400, 2-channel HM-600/700/800, 4-channel HM-1000/1200/1500.
@@ -79,6 +118,8 @@ CONFIG_SCHEMA = cv.All(
             ),
             # Passive, receive-only detection of nearby scanning/probing.
             cv.Optional(CONF_SCAN_DETECTION, default=False): cv.boolean,
+            # One-shot discovery scan on boot (never recurring). See _scan_on_boot.
+            cv.Optional(CONF_SCAN_ON_BOOT, default=False): _scan_on_boot,
             cv.Required(CONF_INVERTERS): cv.All(
                 cv.ensure_list(INVERTER_SCHEMA), cv.Length(min=1)
             ),
@@ -109,6 +150,18 @@ async def to_code(config):
         cg.add(var.set_irq_pin(irq_pin))
     cg.add(var.set_pa_level(config[CONF_PA_LEVEL]))
     cg.add(var.set_scan_detection(config[CONF_SCAN_DETECTION]))
+
+    if (scan_boot := config[CONF_SCAN_ON_BOOT]) is not None:
+        bitmask = 0
+        for name in scan_boot[CONF_COMMANDS]:
+            bitmask |= SCAN_COMMAND_BITS[name]
+        cg.add(
+            var.set_scan_on_boot(
+                scan_boot[CONF_DELAY].total_milliseconds,
+                scan_boot[CONF_DURATION].total_milliseconds,
+                bitmask,
+            )
+        )
 
     for inverter_config in config[CONF_INVERTERS]:
         inverter = cg.new_Pvariable(inverter_config[CONF_ID])
@@ -141,4 +194,38 @@ async def radio_set_power_limit_to_code(config, action_id, template_arg, args):
     persistent = await cg.templatable(config[CONF_PERSISTENT], args, cg.bool_)
     cg.add(var.set_percent(percent))
     cg.add(var.set_persistent(persistent))
+    return var
+
+
+# Active over-the-air discovery scan. Transmits, so it only runs on an explicit
+# one-shot trigger (this action, a button, or scan_on_boot) — never a recurring timer.
+# See docs/scanner-spec.md.
+SCAN_INVERTERS_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(HoymilesDtuComponent),
+        cv.Optional(CONF_DURATION, default="20s"): cv.positive_time_period_milliseconds,
+        cv.Optional(
+            CONF_COMMANDS, default=["search_id", "collect_info"]
+        ): SCAN_COMMANDS_SCHEMA,
+    }
+)
+
+
+@automation.register_action(
+    "hoymiles_dtu.scan_inverters",
+    ScanInvertersAction,
+    SCAN_INVERTERS_ACTION_SCHEMA,
+)
+async def scan_inverters_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    duration = await cg.templatable(
+        config[CONF_DURATION].total_milliseconds, args, cg.uint32
+    )
+    cg.add(var.set_duration(duration))
+    bitmask = 0
+    for name in config[CONF_COMMANDS]:
+        bitmask |= SCAN_COMMAND_BITS[name]
+    commands = await cg.templatable(bitmask, args, cg.uint8)
+    cg.add(var.set_commands(commands))
     return var
