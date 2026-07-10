@@ -453,15 +453,20 @@ static void test_scan_responses() {
   ci_ok[10] = hm_crc8(ci_ok, 10);
   CHECK(hm_parse_collect_info_response(ci_ok, sizeof(ci_ok), &d) && d.serial_suffix == 0x85034022UL);
 
-  // "Discover my own serial": a Search-ID reply for our HM-1200 yields the last 8 printed digits
-  // (82806989) — which is serial & 0xFFFFFFFF and the low 4 radio-address bytes.
-  uint8_t mine[16];
-  memcpy(mine, sid_resp, sizeof(mine));
-  put32(mine, 1, 0x82806989UL);
-  put32(mine, 11, 0x82806989UL);
-  mine[15] = hm_crc8(mine, 15);
-  CHECK(hm_parse_search_id_response(mine, sizeof(mine), &d));
+  // Real Search-ID reply captured on-air from the live HM-1200 (2026-07-10 daylight unbound scan).
+  // Unlike the report's HMS-600 (which echoes the DTU serial at [5..8]), this inverter echoes its
+  // OWN serial there and repeats it again at [11..14]. The parser must still extract serial suffix
+  // 82806989 (= serial & 0xFFFFFFFF = the low radio-address bytes) and PID 0x1161, with a valid CRC8.
+  const uint8_t hm1200_resp[] = {0x82, 0x82, 0x80, 0x69, 0x89, 0x82, 0x80, 0x69,
+                                 0x89, 0x11, 0x61, 0x82, 0x80, 0x69, 0x89, 0x10};
+  CHECK(hm_crc8(hm1200_resp, 15) == hm1200_resp[15]);  // the real trailing CRC8 validates
+  CHECK(hm_parse_search_id_response(hm1200_resp, sizeof(hm1200_resp), &d));
+  CHECK(d.serial_suffix == 0x82806989UL);
   CHECK(d.serial_suffix == static_cast<uint32_t>(0x116182806989ULL & 0xFFFFFFFFUL));
+  CHECK(d.pid == 0x1161);
+  // This inverter echoes its own serial at [5..8], not the DTU serial — the reason the component's
+  // scan-packet filter must accept a self-echo, not only a DTU-serial echo (handle_scan_packet_).
+  CHECK(d.responder_dtu_serial == 0x82806989UL);
   uint8_t addr[5];
   hm_radio_id_to_address(hm_radio_id_from_serial(0x116182806989ULL), addr);
   CHECK(addr[1] == 0x82 && addr[2] == 0x80 && addr[3] == 0x69 && addr[4] == 0x89);

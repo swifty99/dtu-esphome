@@ -26,7 +26,8 @@ Two legitimate uses, both on hardware you own or are authorised to assess:
 Honest framing, stated plainly and up front in the README when this ships: the
 scanner transmits the exact requests the CCC report describes as the attack, and
 exploits the same unauthenticated-protocol flaw. It is therefore **disabled by
-default, only ever runs on an explicit user-initiated action, never on a timer,
+default, only ever runs on an explicit one-shot trigger — the `scan_inverters`
+action, a button, or a single `scan_on_boot` scan — never on a recurring timer,
 and is bounded in duration.** It only *reads* serials — it sends no power-limit,
 on/off, or firmware command, so it cannot change an inverter's operating state.
 Run it only against inverters you own or are authorised to assess.
@@ -131,12 +132,14 @@ alongside `TELEMETRY` and `DEV_CONTROL`.
 
 ## Config surface (deferred to HIL)
 
-Gated behind an **action**, not a boolean option, because it transmits and must
-be user-initiated. Mirrors the existing `radio_set_power_limit` action wiring
-(`Action` + `Parented`, `RadioSetPowerLimitAction`).
+Gated behind an **action** (plus a `scan_on_boot` one-shot), not a recurring
+timer, because it transmits and must be an explicit, bounded event. Mirrors the
+existing `radio_set_power_limit` action wiring (`Action` + `Parented`,
+`RadioSetPowerLimitAction`); the `scan_on_boot` option schedules the same
+`scan_inverters` call once via `set_timeout`.
 
 ```yaml
-# Action — the only way to start a scan. Never runs on a timer.
+# Action / button — a one-shot way to start a scan. Never on a recurring timer.
 button:
   - platform: template
     name: "Scan for inverters"

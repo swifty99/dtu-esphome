@@ -39,6 +39,7 @@ jobs:
           - test.esp32s3-idf.yaml
           - test.multi-model.yaml
           - test.scan-detect.yaml
+          - test.scan-on-boot.yaml
     steps:
       - uses: actions/checkout@v4
       - run: esphome compile tests/components/hoymiles_dtu/${{ matrix.target }}

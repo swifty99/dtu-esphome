@@ -106,6 +106,14 @@ class HoymilesDtuComponent : public PollingComponent,
   }
   void set_pa_level(HmPaLevel pa_level) { pa_level_ = pa_level; }
   void set_scan_detection(bool enabled) { scan_detection_ = enabled; }
+  // Enable a single discovery scan fired once, delay_ms after boot (never recurring). commands is a
+  // bitmask of HM_SCAN_CMD_*; 0 means both. Configured via the scan_on_boot: hub option.
+  void set_scan_on_boot(uint32_t delay_ms, uint32_t duration_ms, uint8_t commands) {
+    scan_on_boot_ = true;
+    scan_on_boot_delay_ms_ = delay_ms;
+    scan_on_boot_duration_ms_ = duration_ms;
+    scan_on_boot_commands_ = commands;
+  }
   void set_scan_detected_text_sensor(text_sensor::TextSensor *sensor) { scan_detected_text_sensor_ = sensor; }
   void set_scan_severity_sensor(sensor::Sensor *sensor) { scan_severity_sensor_ = sensor; }
   void set_scan_result_text_sensor(text_sensor::TextSensor *sensor) { scan_result_text_sensor_ = sensor; }
@@ -204,6 +212,10 @@ class HoymilesDtuComponent : public PollingComponent,
   bool dtu_serial_configured_{false};
   bool radio_ok_{false};
   bool scan_detection_{false};
+  bool scan_on_boot_{false};
+  uint32_t scan_on_boot_delay_ms_{45000};
+  uint32_t scan_on_boot_duration_ms_{20000};
+  uint8_t scan_on_boot_commands_{0};
   bool monitoring_{false};
   uint8_t monitor_channel_index_{0};
   uint32_t monitor_last_hop_ms_{0};

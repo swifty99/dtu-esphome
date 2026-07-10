@@ -106,6 +106,12 @@ is a standard ESPHome `PollingComponent`, so it accepts the usual
 - `scan_detection` (*Optional*, boolean, default `false`): enable passive,
   receive-only detection of nearby scanning/probing of Hoymiles inverters.
   See [Security: detecting scans](#security-detecting-scans).
+- `scan_on_boot` (*Optional*, boolean or mapping, default `false`): run **one**
+  active discovery scan a short delay after boot — a one-shot, never recurring.
+  `true` uses defaults; a mapping accepts `delay` (default `45s`, wait for
+  wifi/time to settle), `duration` (default `20s`), and `commands` (default both).
+  Because a scan transmits, there is deliberately no interval/periodic form. See
+  [Security: scanning for inverters](#security-scanning-for-inverters).
 - **`inverters`** (**Required**, list, at least one): the inverters this hub
   talks to. See below.
 - Also accepts the standard SPI device options (`spi_id`, `cs_pin`,
@@ -339,11 +345,12 @@ both on hardware you own or are authorised to assess:
   your site to see what an attacker with a cheap module would see.
 
 Stated plainly: this **transmits the exact requests the CCC report describes as
-the attack**, and exploits the same firmware flaw. It is therefore an **on-demand
-action only** — never a config option, never on a timer — and it only *reads*
-serials: it sends no on/off, power-limit, or firmware command, so it cannot
-change an inverter's operating state. Run it only against inverters you own or
-are authorised to assess. Full design: [`docs/scanner-spec.md`](docs/scanner-spec.md).
+the attack**, and exploits the same firmware flaw. It is therefore restricted to
+**explicit one-shot triggers** — the `scan_inverters` action, a button, or a
+single `scan_on_boot` scan — and **never runs on a recurring timer**; it only
+*reads* serials: it sends no on/off, power-limit, or firmware command, so it
+cannot change an inverter's operating state. Run it only against inverters you own
+or are authorised to assess. Full design: [`docs/scanner-spec.md`](docs/scanner-spec.md).
 
 A scan broadcasts two discovery commands across the HM channels for its
 `duration`:
@@ -376,6 +383,31 @@ inverter; the printed 4-digit model prefix is not transmitted, complete it from
 the label), `PID` is the model/product ID (`search_id` only; `-` for
 `collect_info`), and `#` is a running count. A scan that finds nothing publishes
 `no inverters found`.
+
+A scan is started by exactly one of three one-shot triggers — never a recurring
+timer:
+
+- the **`hoymiles_dtu.scan_inverters`** action (from any ESPHome automation);
+- a **template button** that calls it (press it when you physically add hardware);
+- the hub's **`scan_on_boot`** option, which runs a single scan a short delay
+  after boot — handy for one-time onboarding of a new node:
+
+```yaml
+hoymiles_dtu:
+  id: dtu
+  # ...
+  scan_on_boot: true            # one scan ~45s after boot, then never again
+  # or, for control:
+  # scan_on_boot:
+  #   delay: 45s
+  #   duration: 20s
+  #   commands: [search_id, collect_info]
+```
+
+Note that an inverter already bound to your own polling DTU answers `search_id`
+only after it has been left unpolled for a few minutes; `collect_info` still works
+while bound. On boot the component has not yet polled, so a `scan_on_boot` with a
+short delay catches that unbound window.
 
 Limitations mirror detection: HM (2.4 GHz) only, probabilistic and range-bound,
 and — because it transmits — it will trip other detectors in range, including

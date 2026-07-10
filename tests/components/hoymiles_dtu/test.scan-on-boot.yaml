@@ -1,0 +1,62 @@
+substitutions:
+  board: esp32dev
+  framework: arduino
+  sck_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  cs_pin: GPIO5
+  ce_pin: GPIO4
+  irq_pin: GPIO16
+
+esphome:
+  name: hoymiles-dtu-scan-on-boot
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+spi:
+  id: dtu_spi
+  clk_pin: ${sck_pin}
+  mosi_pin: ${mosi_pin}
+  miso_pin: ${miso_pin}
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: ${cs_pin}
+  ce_pin: ${ce_pin}
+  irq_pin: ${irq_pin}
+  update_interval: 30s
+  pa_level: low
+  # One bounded discovery scan fired once after boot (never recurring). Mapping form exercises the
+  # full schema; `scan_on_boot: true` would enable it with defaults.
+  scan_on_boot:
+    delay: 45s
+    duration: 20s
+    commands: [search_id, collect_info]
+  inverters:
+    - id: hm4
+      serial: "114180000000"
+      model: hm_1500
+
+sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_found_count:
+      name: "DTU Scan Found"
+
+text_sensor:
+  - platform: hoymiles_dtu
+    dtu_id: dtu
+    scan_result:
+      name: "DTU Scan Result"

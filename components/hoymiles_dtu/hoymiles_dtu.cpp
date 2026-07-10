@@ -207,6 +207,16 @@ void HoymilesDtuComponent::setup() {
     return;
   }
   ESP_LOGCONFIG(TAG, "nRF24 radio ready, DTU serial 0x%08X", dtu_serial_);
+
+  if (scan_on_boot_) {
+    // Fire one bounded discovery scan a short delay after boot (let wifi/time and the first poll
+    // settle). set_timeout runs the callback exactly once, so this can never become a recurring
+    // scan — the only ways to scan are this boot one-shot, the scan_inverters action, and a button.
+    this->set_timeout("scan_on_boot", scan_on_boot_delay_ms_, [this]() {
+      ESP_LOGI(TAG, "scan_on_boot: starting one-shot discovery scan");
+      this->scan_inverters(scan_on_boot_duration_ms_, scan_on_boot_commands_);
+    });
+  }
 }
 
 void HoymilesDtuComponent::update() {
@@ -277,7 +287,12 @@ void HoymilesDtuComponent::dump_config() {
                 scan_detection_ ? "enabled (passive; listens on inverter + Search-ID address)" : "disabled");
   // The active scanner is available on-demand via the scan_inverters action (it transmits discovery
   // requests, so it never runs on a timer). Reported here only as an availability note.
-  ESP_LOGCONFIG(TAG, "  Active scan: on-demand via scan_inverters action");
+  if (scan_on_boot_) {
+    ESP_LOGCONFIG(TAG, "  Active scan: on-demand via scan_inverters action; one-shot on boot (+%ums, %ums)",
+                  scan_on_boot_delay_ms_, scan_on_boot_duration_ms_);
+  } else {
+    ESP_LOGCONFIG(TAG, "  Active scan: on-demand via scan_inverters action");
+  }
   for (auto *inverter : inverters_) {
     ESP_LOGCONFIG(TAG, "  Inverter serial=%012llX model=%s status=%s last_seen=%us error=%s", inverter->get_serial(),
                   hm_model_to_string(inverter->get_model()), hm_status_to_string(inverter->get_status()),
@@ -970,8 +985,13 @@ void HoymilesDtuComponent::poll_scan_rx_(uint32_t now) {
 void HoymilesDtuComponent::handle_scan_packet_(const uint8_t *packet, uint8_t len, uint32_t now) {
   HmDiscoveredInverter inverter;
   if (hm_parse_search_id_response(packet, len, &inverter)) {
-    // The inverter echoes the DTU address it is replying to; ignore anything not addressed to us.
-    if (dtu_serial_ == 0 || inverter.responder_dtu_serial == dtu_serial_) {
+    // The reply echoes a serial at [5..8]. Some firmwares echo the DTU serial we transmitted (the
+    // CCC report's HMS-600 capture); the live HM-1200 echoes its own serial there instead. Accept
+    // either — the 0x82 opcode and the trailing CRC8 (both verified by hm_parse_search_id_response)
+    // already authenticate the reply as a genuine answer to our scan. Only drop a reply whose echo
+    // is neither our DTU serial nor the inverter's own serial, which would mean it was not ours.
+    if (dtu_serial_ == 0 || inverter.responder_dtu_serial == dtu_serial_ ||
+        inverter.responder_dtu_serial == inverter.serial_suffix) {
       report_discovered_(inverter, true, now);
     }
     return;
