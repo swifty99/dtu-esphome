@@ -1,0 +1,81 @@
+# Compile test: exercises hoymiles_dtu.radio_set_power_limit from a template number, a button and an
+# API action (the three ways it is typically wired up), plus a watt slider converting W -> %.
+substitutions:
+  board: esp32dev
+  framework: arduino
+  sck_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  cs_pin: GPIO5
+  ce_pin: GPIO4
+  irq_pin: GPIO16
+
+esphome:
+  name: hoymiles-dtu-power-limit
+
+esp32:
+  board: ${board}
+  framework:
+    type: ${framework}
+
+logger:
+
+wifi:
+  ssid: test
+  password: testtesttest
+
+api:
+  actions:
+    - action: set_power_limit
+      variables:
+        percent: int
+      then:
+        - hoymiles_dtu.radio_set_power_limit:
+            id: dtu
+            percent: !lambda 'return percent;'
+            persistent: false
+
+spi:
+  id: dtu_spi
+  clk_pin: ${sck_pin}
+  mosi_pin: ${mosi_pin}
+  miso_pin: ${miso_pin}
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [hoymiles_dtu]
+
+hoymiles_dtu:
+  id: dtu
+  spi_id: dtu_spi
+  cs_pin: ${cs_pin}
+  ce_pin: ${ce_pin}
+  irq_pin: ${irq_pin}
+  inverters:
+    - id: hm8
+      serial: "114180000000"
+      model: hm_800
+
+button:
+  - platform: template
+    name: "Limit to 80%"
+    on_press:
+      - hoymiles_dtu.radio_set_power_limit:
+          id: dtu
+          percent: 80
+          persistent: false
+
+number:
+  - platform: template
+    name: "Power Limit (W)"
+    min_value: 0
+    max_value: 800
+    step: 10
+    optimistic: true
+    set_action:
+      - hoymiles_dtu.radio_set_power_limit:
+          id: dtu
+          percent: !lambda 'return (int) roundf(x / 800.0f * 100.0f);'
+          persistent: false

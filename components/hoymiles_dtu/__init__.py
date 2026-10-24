@@ -215,6 +215,7 @@ SCAN_INVERTERS_ACTION_SCHEMA = cv.Schema(
     "hoymiles_dtu.scan_inverters",
     ScanInvertersAction,
     SCAN_INVERTERS_ACTION_SCHEMA,
+    synchronous=True,  # play() only sets flags; the scan itself runs from loop()
 )
 async def scan_inverters_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)

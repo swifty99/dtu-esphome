@@ -57,6 +57,9 @@ static constexpr uint8_t MAX_TX_ATTEMPTS = 30;
 // On a partial record (link is up, some fragments missing), re-request the whole record this many
 // times before failing the exchange. Each re-request keeps already-received fragments.
 static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
+// A power-limit command that gets no ACK / no confirmation is retried this many extra times (the
+// command is idempotent, so re-sending one that already landed is harmless).
+static constexpr uint8_t POWER_LIMIT_MAX_RETRIES = 2;
 // Passive scan monitor: dwell this long per channel before hopping, so a channel-hopping attacker's
 // bursts overlap our listen window; and rate-limit reports so a continuous scan does not spam.
 static constexpr uint32_t MONITOR_CHANNEL_DWELL_MS = 20;
@@ -162,6 +165,41 @@ void HoymilesDtuInverter::mark_offline_if_expired(uint32_t now, uint32_t timeout
   }
   status_ = OFFLINE;
   last_error_ = "offline timeout";
+
+  // Publish NaN so Home Assistant shows the live readings as "unavailable" instead of the stale last value.
+  // yield_today / yield_total are intentionally left untouched (cumulative counters, keep last known value).
+  if (ac_power_sensor_ != nullptr) {
+    ac_power_sensor_->publish_state(NAN);
+  }
+  if (ac_voltage_sensor_ != nullptr) {
+    ac_voltage_sensor_->publish_state(NAN);
+  }
+  if (ac_current_sensor_ != nullptr) {
+    ac_current_sensor_->publish_state(NAN);
+  }
+  if (ac_frequency_sensor_ != nullptr) {
+    ac_frequency_sensor_->publish_state(NAN);
+  }
+  if (reactive_power_sensor_ != nullptr) {
+    reactive_power_sensor_->publish_state(NAN);
+  }
+  if (power_factor_sensor_ != nullptr) {
+    power_factor_sensor_->publish_state(NAN);
+  }
+  if (temperature_sensor_ != nullptr) {
+    temperature_sensor_->publish_state(NAN);
+  }
+  for (auto &sensors : channels_) {
+    if (sensors.dc_voltage != nullptr) {
+      sensors.dc_voltage->publish_state(NAN);
+    }
+    if (sensors.dc_current != nullptr) {
+      sensors.dc_current->publish_state(NAN);
+    }
+    if (sensors.dc_power != nullptr) {
+      sensors.dc_power->publish_state(NAN);
+    }
+  }
   publish_status_();
 }
 
@@ -311,6 +349,7 @@ void HoymilesDtuComponent::radio_set_power_limit(uint16_t percent, bool persiste
   }
   power_limit_percent_ = percent;
   power_limit_persistent_ = persistent;
+  power_limit_retries_left_ = POWER_LIMIT_MAX_RETRIES;
   power_limit_pending_ = true;
 }
 
@@ -396,6 +435,7 @@ void HoymilesDtuComponent::start_request_(HoymilesDtuInverter *inverter, uint32_
   // the record as complete. (read_available_packets_ lowers this to the real count.)
   expected_frames_ = HM_MAX_FRAME_COUNT;
   record_attempt_ = 0;
+  record_crc_failed_ = false;
   rx_packet_count_ = 0;
   invalid_frame_count_ = 0;
   duplicate_frame_count_ = 0;
@@ -555,6 +595,20 @@ void HoymilesDtuComponent::poll_rx_(uint32_t now) {
     finish_request_(true, "", now);
     return;
   }
+  if (record_crc_failed_) {
+    // The fragments assembled into a record whose CRC16 does not match (corrupt fragment, or pieces
+    // of two different samples). Discard them all and re-request from scratch within the budget.
+    record_crc_failed_ = false;
+    frame_count_ = 0;
+    expected_frames_ = HM_MAX_FRAME_COUNT;
+    if (++record_attempt_ <= MAX_RECORD_ATTEMPTS) {
+      tx_attempt_ = 0;
+      transmit_request_(now);
+    } else {
+      finish_request_(false, "record crc mismatch", now);
+    }
+    return;
+  }
   if (now - rx_started_ms_ >= RX_TIMEOUT_MS) {
     // Partial record: the inverter is answering but we missed fragment(s). Re-request the whole
     // record (keeping fragments we already have — read_available_packets_ dedups by id) up to a
@@ -593,6 +647,13 @@ void HoymilesDtuComponent::finish_request_(bool success, const char *error, uint
   if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
     if (!success) {
       publish_radio_error_(error);
+      // Retry unless the inverter actively rejected the command (it answered, so resending is pointless).
+      if (!dev_ctrl_got_response_ && power_limit_retries_left_ > 0) {
+        power_limit_retries_left_--;
+        power_limit_pending_ = true;
+        ESP_LOGW(TAG, "Power limit not confirmed (%s); retrying (%u retr%s left)", error, power_limit_retries_left_,
+                 power_limit_retries_left_ == 1 ? "y" : "ies");
+      }
     }
   } else if (!success && active_inverter_ != nullptr) {
     active_inverter_->set_last_error(error);
@@ -606,10 +667,17 @@ void HoymilesDtuComponent::finish_request_(bool success, const char *error, uint
 void HoymilesDtuComponent::log_exchange_summary_(bool success, const char *error, uint32_t now) {
   const uint8_t tx_channel = HM_RF_CHANNELS[tx_channel_index_];
   if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
-    const char *result =
-        success ? "ACCEPTED by inverter" : (dev_ctrl_got_response_ ? "REJECTED" : "no confirmation frame");
-    ESP_LOGI(TAG, "Power limit %u%% (%s): TX_DS on ch=%u -> %s", power_limit_percent_,
-             power_limit_persistent_ ? "persistent" : "non-persistent", tx_channel, result);
+    const bool acked = (tx_status_ & NRF_STATUS_TX_DS) != 0;
+    if (success) {
+      ESP_LOGI(TAG, "Power limit %u%% (%s) on ch=%u: ACCEPTED by inverter", power_limit_percent_,
+               power_limit_persistent_ ? "persistent" : "non-persistent", tx_channel);
+    } else {
+      const char *result = dev_ctrl_got_response_ ? "REJECTED by inverter"
+                           : acked                ? "delivered (TX_DS) but no confirmation frame"
+                                                  : "no ACK from inverter";
+      ESP_LOGW(TAG, "Power limit %u%% (%s) on ch=%u: %s", power_limit_percent_,
+               power_limit_persistent_ ? "persistent" : "non-persistent", tx_channel, result);
+    }
     return;
   }
 
@@ -714,6 +782,12 @@ bool HoymilesDtuComponent::process_response_(uint32_t now) {
   uint8_t payload[HM_MAX_PAYLOAD_SIZE];
   uint8_t payload_len = 0;
   if (!hm_assemble_payload(frames_.data(), expected_frames_, payload, sizeof(payload), &payload_len)) {
+    return false;
+  }
+  if (!hm_verify_record_crc(payload, payload_len)) {
+    ESP_LOGW(TAG, "Realtime record CRC16 mismatch (%u bytes) - discarding fragments", payload_len);
+    active_inverter_->set_last_error("record crc mismatch");
+    record_crc_failed_ = true;
     return false;
   }
   HmTelemetry telemetry;

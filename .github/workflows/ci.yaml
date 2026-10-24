@@ -40,6 +40,9 @@ jobs:
           - test.multi-model.yaml
           - test.scan-detect.yaml
           - test.scan-on-boot.yaml
+          - test.power-limit.yaml
+          - test.minimal.yaml
+          - test.scan.yaml
     steps:
       - uses: actions/checkout@v4
       - run: esphome compile tests/components/hoymiles_dtu/${{ matrix.target }}

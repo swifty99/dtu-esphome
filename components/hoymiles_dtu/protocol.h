@@ -90,6 +90,9 @@ uint8_t hm_build_power_limit_request(uint64_t inverter_radio_id, uint32_t dtu_se
 bool hm_parse_frame(const uint8_t *packet, uint8_t len, uint64_t inverter_radio_id, HmFrame *frame);
 bool hm_assemble_payload(const HmFrame *frames, uint8_t frame_count, uint8_t *payload, size_t payload_len,
                          uint8_t *assembled_len);
+// Verify the CRC16 that terminates an assembled realtime record (CRC16 over everything before the
+// last two bytes, stored big-endian). Catches fragments stitched together from different samples.
+bool hm_verify_record_crc(const uint8_t *payload, uint8_t len);
 // Number of DC channels this model reports (1, 2, or 4).
 uint8_t hm_model_channel_count(HmModel model);
 // Decode an assembled realtime record into telemetry. Field byte offsets follow the model's channel

@@ -313,6 +313,17 @@ static void test_decode_4ch_golden_capture() {
   uint8_t plen = 0;
   CHECK(hm_assemble_payload(frames, 4, payload, sizeof(payload), &plen));
   CHECK(plen == 64);
+  // The record's trailing CRC16 (0x864B on this capture) must verify, and any corruption must fail it.
+  CHECK(hm_verify_record_crc(payload, plen));
+  uint8_t corrupted[HM_MAX_PAYLOAD_SIZE];
+  memcpy(corrupted, payload, plen);
+  corrupted[10] ^= 0x01;  // a flipped bit in one value
+  CHECK(!hm_verify_record_crc(corrupted, plen));
+  memcpy(corrupted, payload, plen);
+  corrupted[plen - 1] ^= 0x80;  // a damaged CRC itself
+  CHECK(!hm_verify_record_crc(corrupted, plen));
+  CHECK(!hm_verify_record_crc(payload, 2));  // too short to hold a CRC
+  CHECK(!hm_verify_record_crc(nullptr, plen));
   HmTelemetry t;
   CHECK(hm_parse_realtime_payload(HM_1200, payload, plen, &t));
   CHECK_NEAR(t.ac_voltage, 236.8f);

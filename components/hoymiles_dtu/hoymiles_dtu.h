@@ -267,6 +267,8 @@ class HoymilesDtuComponent : public PollingComponent,
   bool power_limit_persistent_{true};
   bool dev_ctrl_got_response_{false};
   bool dev_ctrl_confirmed_{false};
+  uint8_t power_limit_retries_left_{0};
+  bool record_crc_failed_{false};
   volatile bool irq_pending_{false};
   bool irq_attached_{false};
   HighFrequencyLoopRequester high_freq_;
