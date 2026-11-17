@@ -50,10 +50,11 @@ static constexpr uint32_t TX_TIMEOUT_MS = 100;
 static constexpr uint32_t RX_TIMEOUT_MS = 520;
 static constexpr uint32_t RX_INITIAL_PENDULUM_MS = 85;
 static constexpr uint32_t RX_CHANNEL_DWELL_MS = 5;
-// Acquisition burst: on no-ACK we retransmit immediately on the next channel (non-blocking, one
-// attempt per loop iteration) up to this many times before giving up for this poll. ~MAX/5 full
-// channel sweeps; with a tight update_interval this approximates Ahoy's steady retransmit cadence.
-static constexpr uint8_t MAX_TX_ATTEMPTS = 30;
+// Requests per poll. Each one is followed by a full RX window whether or not the inverter's
+// hardware ACK arrived; only an empty window moves on to the next TX channel. Ahoy does the same
+// (NrfRadio.h: `if(tx_ok || tx_fail)` starts listening) and sends at most ~4-5 per poll. HM
+// inverters often answer requests whose ACK the DTU never sees, so gating RX on TX_DS loses them.
+static constexpr uint8_t MAX_TX_ATTEMPTS = 5;
 // On a partial record (link is up, some fragments missing), re-request the whole record this many
 // times before failing the exchange. Each re-request keeps already-received fragments.
 static constexpr uint8_t MAX_RECORD_ATTEMPTS = 4;
@@ -508,27 +509,34 @@ void HoymilesDtuComponent::poll_tx_(uint32_t now) {
     tx_status_ = status;
     tx_result_ = "TX_DS";
     clear_status_(NRF_STATUS_TX_DS);
-    ESP_LOGD(TAG, "TX_DS ch=%u attempt=%u", HM_RF_CHANNELS[tx_channel_index_], tx_attempt_);
     begin_rx_window_(now);
+    ESP_LOGD(TAG, "TX_DS ch=%u attempt=%u", HM_RF_CHANNELS[tx_channel_index_], tx_attempt_);
     return;
   }
 
   const bool max_rt = (status & NRF_STATUS_MAX_RT) != 0;
   const bool timed_out = now - request_started_ms_ > TX_TIMEOUT_MS;
   if (max_rt || timed_out) {
-    // No ACK on this channel. Ahoy-style acquisition: immediately retransmit on the next channel
-    // rather than waiting a whole poll interval, so we sweep the inverter's listen window fast.
+    // No ACK seen. The inverter may still have received the request (its ACK is lost often), so
+    // listen exactly as after TX_DS. retry_request_() moves to the next channel if the window
+    // stays empty.
     set_ce_(false);
     tx_status_ = status;
     tx_result_ = max_rt ? "MAX_RT" : "timeout";
     clear_status_(NRF_STATUS_MAX_RT);
     command_(NRF_FLUSH_TX);
-    if (++tx_attempt_ < MAX_TX_ATTEMPTS) {
-      transmit_request_(now);
-    } else {
-      finish_request_(false, "no ack", now);
-    }
+    begin_rx_window_(now);
   }
+}
+
+// An RX window ended without the data we wanted. Send the request again on the next channel
+// while the per-poll budget lasts. Returns false once it is spent, and the caller ends the exchange.
+bool HoymilesDtuComponent::retry_request_(uint32_t now) {
+  if (++tx_attempt_ >= MAX_TX_ATTEMPTS) {
+    return false;
+  }
+  transmit_request_(now);
+  return true;
 }
 
 void HoymilesDtuComponent::poll_rx_(uint32_t now) {
@@ -539,13 +547,17 @@ void HoymilesDtuComponent::poll_rx_(uint32_t now) {
   read_available_packets_();
 
   if (exchange_kind_ == ExchangeKind::DEV_CONTROL) {
-    // Single confirmation frame (0xD1): no re-request, no channel hopping — just wait out the
-    // window on the parked channel (begin_rx_window_ already put us on tx_channel+3).
+    // Single confirmation frame (0xD1): no channel hopping — just wait out the window on the
+    // parked channel (begin_rx_window_ already put us on tx_channel+3). Only a window with no
+    // answer at all sends the command again.
     if (dev_ctrl_confirmed_) {
       finish_request_(true, "", now);
       return;
     }
     if (now - rx_started_ms_ >= RX_TIMEOUT_MS) {
+      if (!dev_ctrl_got_response_ && retry_request_(now)) {
+        return;
+      }
       finish_request_(false, dev_ctrl_got_response_ ? "power-limit rejected" : "no confirmation", now);
     }
     return;
@@ -564,6 +576,9 @@ void HoymilesDtuComponent::poll_rx_(uint32_t now) {
                record_attempt_);
       tx_attempt_ = 0;  // give the re-request a fresh acquisition burst
       transmit_request_(now);
+      return;
+    }
+    if (frame_count_ == 0 && retry_request_(now)) {
       return;
     }
     finish_request_(false, frame_count_ == 0 ? "no response" : "incomplete response", now);

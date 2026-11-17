@@ -32,8 +32,9 @@ Protocol facts used by the first HM 4-channel milestone:
 - RX pipe/address setup: Ahoy `NrfRadio.h::setup()` opens the reading pipe on
   the DTU's own radio id; `sendPacket()` opens the writing pipe on the target
   inverter's radio id (RF24 pipe 0 handles the TX ACK).
-- On TX ACK, Ahoy sets HM `rxOffset = 3`, starts RX on `(txCh+3) % 5`. For the
-  first `DURATION_TXFRAME = 85ms` it pendulates RX between `txCh+3` and
+- After every TX, ACKed or not (`if(tx_ok || tx_fail)` in `NrfRadio.h`; the
+  ACK only bumps `mAckCount`), Ahoy sets HM `rxOffset = 3` and starts RX on
+  `(txCh+3) % 5`. For the first `DURATION_TXFRAME = 85ms` it pendulates RX between `txCh+3` and
   `txCh+2` (channel dwell `DURATION_LISTEN_MIN = 5ms`), then falls back to a
   reverse sweep through all five channels. These map to this component's
   `RX_INITIAL_PENDULUM_MS` / `RX_CHANNEL_DWELL_MS` constants.

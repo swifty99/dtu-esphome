@@ -161,6 +161,7 @@ class HoymilesDtuComponent : public PollingComponent,
   static void irq_handler_(HoymilesDtuComponent *arg);
   void poll_tx_(uint32_t now);
   void poll_rx_(uint32_t now);
+  bool retry_request_(uint32_t now);
   void finish_request_(bool success, const char *error, uint32_t now);
   void log_exchange_summary_(bool success, const char *error, uint32_t now);
   void read_available_packets_();
