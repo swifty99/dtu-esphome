@@ -447,8 +447,10 @@ and `parse_serial_bcd` in `protocol.py` exist specifically to keep it correct.
    both the inverter's and the DTU's radio-address bytes embedded (so the
    inverter can verify it's being addressed and knows where to reply), a
    timestamp, and a CRC16 + CRC8 trailer (`hm_build_realtime_request`).
-2. The inverter's radio auto-ACKs at the hardware level (`TX_DS`) — this
-   confirms delivery but not that the inverter accepted the request.
+2. The inverter's radio may auto-ACK at the hardware level (`TX_DS`). That
+   confirms delivery but not that the inverter accepted the request, and its
+   absence (`MAX_RT`) does not mean the request was lost: HM inverters often
+   answer requests whose ACK never reaches the DTU. The DTU listens either way.
 3. The inverter then transmits its reply as a run of fragments, one per
    packet, each stamped `command = 0x95` (`0x15 | 0x80`, "all frames") and a
    1-based fragment ID in the low 7 bits of a header byte; the *last*
@@ -462,10 +464,10 @@ and `parse_serial_bcd` in `protocol.py` exist specifically to keep it correct.
    (1/2/4-channel HM models each have a different byte layout for AC/DC
    fields — see `hm_model_layout` in `protocol.cpp`).
 
-If the inverter never ACKs, the DTU retransmits on the next channel in the
-hop sequence rather than waiting out a full poll interval — an acquisition
-burst, up to 30 attempts, mirroring Ahoy's own retransmit cadence. If the ACK
-lands but fragments are incomplete when the RX window closes, the DTU
+If an RX window closes with no fragment at all, the DTU sends the request
+again on the next channel in the hop sequence, up to 5 requests per poll,
+like Ahoy (which also listens after every request, ACKed or not). If
+fragments arrive but are incomplete when the RX window closes, the DTU
 re-requests the whole record (up to 4 times) rather than giving up — every
 frame it already has is kept, only the missing ones need to reappear.
 
